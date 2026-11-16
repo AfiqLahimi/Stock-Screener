@@ -1230,6 +1230,8 @@ a{{color:{P['accent']}}}
 .news a:hover{{color:{P['accent']}}}
 .news .meta{{color:{P['muted']};font-size:12px;margin-top:4px}}
 .news .pill{{font-size:11px;padding:1px 8px}}
+.just{{margin-top:auto;padding-top:10px;font-size:13px;line-height:1.55;color:{P['text']};opacity:.82;
+  border-top:1px dashed {P['border']};margin-top:10px}}
 .foot{{color:{P['muted']};font-size:12px;line-height:1.6;border-top:1px solid {P['border']};padding-top:14px;margin-top:26px}}
 </style>""", unsafe_allow_html=True)
 
@@ -1523,6 +1525,7 @@ with tab_an:
         pats_full = ta_plus.pattern_report(d, sup, res)
         bt_df, bt_m = ta_plus.walk_forward(d["Close"].values, fc["horizon"], fc["lookback"])
 
+        F = score_factors(d, sup, res)
         tabs = st.tabs(["🧠 Summary", "🧮 Audit", "📋 Trade plan", "⏱️ Timeframes", "📊 Volume", "📐 ADX",
                         "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
 
@@ -1536,6 +1539,177 @@ with tab_an:
 <div style="font-size:15.5px;line-height:1.7">{head}</div>
 <div class="note">Written automatically from the indicator values calculated on this page (rule-based; every number
 comes from the data, nothing is invented). Not investment advice.</div></div>""", unsafe_allow_html=True)
+            # ---------------- Key numbers at a glance (every analysis, with justification)
+            def kcard(title, verdict, vcol, rows, why):
+                trs = "".join(f"<tr><td>{a}</td><td>{b}</td></tr>" for a, b in rows)
+                return (f"<div class='card' style='margin:0;border-top:3px solid {vcol};display:flex;flex-direction:column'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;gap:8px;"
+                        f"flex-wrap:wrap'><h3 style='margin:0'>{title}</h3>{pill(verdict, vcol)}</div>"
+                        f"<table class='kv' style='margin-top:10px'>{trs}</table>"
+                        f"<div class='just'><b>Justification:</b> {why}</div></div>")
+
+            nz = lambda v, f_="{:.3f}", na="N/A": na if v is None or (isinstance(v, float) and np.isnan(v)) else f_.format(v)  # noqa: E731
+            cards_k = []
+
+            # 1. Trade plan
+            rr1v = plan["rr1"]
+            rr_txt = "–" if np.isnan(rr1v) else f"1 : {rr1v:.2f}"
+            rr_q = ("good (≥ 2)" if rr1v >= 2 else "acceptable (1.5–2)" if rr1v >= 1.5 else "poor (< 1.5)") \
+                if not np.isnan(rr1v) else "not available"
+            act_col = (P["up"] if "BUY" in plan["action"] and "DON'T" not in plan["action"] else
+                       P["down"] if "AVOID" in plan["action"] else P["warn"] if "DON'T" in plan["action"] else P["muted"])
+            cards_k.append(kcard(
+                "📋 Trade plan", plan["action"].split(" ", 1)[1].title(), act_col,
+                [("Buy zone", f"{cur}{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}"),
+                 ("Reference entry", f"{cur}{plan['entry']:.3f}"),
+                 ("Stop loss", f"{cur}{plan['stop']:.3f} ({(plan['stop'] / plan['entry'] - 1) * 100:.1f}%)"),
+                 ("Target 1 / Target 2", f"{cur}{plan['t1']:.3f} / {cur}{plan['t2']:.3f}"),
+                 ("Risk : Reward (T1)", rr_txt),
+                 ("Sell zone", f"{cur}{plan['sell_lo']:.3f} – {plan['sell_hi']:.3f}")],
+                f"Buy zone = nearest support {cur}{plan['s1']:.3f} ({sup[0][1] or 'projected'} touches) up to +0.5 ATR. "
+                f"Stop sits {plan['atr_mult']:g} × ATR ({cur}{plan['atr']:.3f}) below support so normal daily noise "
+                f"doesn't trigger it. Target 1 = nearest resistance ({res[0][1] or 'projected'} touches). "
+                f"R:R is {rr_q}."))
+
+            # 2. Trend forecast
+            fc_col = {"Uptrend": P["up"], "Downtrend": P["down"]}.get(fc["direction"], P["muted"])
+            bt_txt = (f"Back-tested direction accuracy {bt_m['dir_acc']:.0f}% over {bt_m['n']} past forecasts "
+                      f"(skill vs 'no change' {bt_m['skill']:+.0f}%); the 95% band actually held the price "
+                      f"{bt_m['cov95']:.0f}% of the time." if bt_m else "No back-test available.")
+            reliab = ("reliable-ish" if bt_m and bt_m["dir_acc"] >= 60 and bt_m["skill"] > 0 else
+                      "weak" if bt_m else "untested")
+            cards_k.append(kcard(
+                f"📈 Trend forecast · {fc['horizon']} {bar_word}s", f"{fc['arrow']} {fc['direction']}", fc_col,
+                [("Projected price", f"{cur}{fc['centre'][-1]:.3f} ({fc['total']:+.1f}%)"),
+                 ("Likely range (68%)", f"{cur}{fc['lo1'][-1]:.3f} – {fc['hi1'][-1]:.3f}"),
+                 ("Wide range (95%)", f"{cur}{fc['lo2'][-1]:.3f} – {fc['hi2'][-1]:.3f}"),
+                 ("Trend fit R²", f"{fc['r2']:.2f} ({fc['strength'].lower()})"),
+                 ("Momentum", fc["momentum"]),
+                 ("Forecast track record", reliab)],
+                f"A straight trend line fitted to the last {fc['lookback']} {bar_word}s, extended forward. "
+                f"R² {fc['r2']:.2f} = {'clean' if fc['r2'] >= 0.7 else 'moderate' if fc['r2'] >= 0.45 else 'choppy'} trend. "
+                + bt_txt))
+
+            # 3. Why this signal (original scoring)
+            top = sorted(F, key=lambda f_: -abs(f_["Points"]))
+            sig_rows = [(f_["Factor"], f"<span style='color:{P['up'] if f_['Points'] > 0 else P['down']}'>"
+                                       f"{f_['Points']:+d}</span> · {f_['Reading']}") for f_ in top[:6]]
+            cards_k.append(kcard(
+                "🧮 Why this signal", f"{label} · {sc:+d}", LABEL_COLOR[label], sig_rows,
+                f"Sum of {len(F)} scored factors = {sum(f_['Points'] for f_ in F):+d} (capped ±100). ≥ +40 Strong Buy, "
+                f"≥ +15 Buy, ≤ −15 Sell, ≤ −40 Strong Sell. Trend (EMAs) "
+                f"{sum(f_['Points'] for f_ in F if f_['Group'] == 'Trend'):+d}, momentum (RSI/MACD) "
+                f"{sum(f_['Points'] for f_ in F if f_['Group'] == 'Momentum'):+d}, levels "
+                f"{sum(f_['Points'] for f_ in F if f_['Group'] == 'Levels'):+d}. Full table in 🧮 Audit."))
+
+            # 4. Volume
+            if va:
+                brk_v = (f"{va['brk']['type']} · {va['brk']['grade']} ({va['brk']['rvol']:.1f}×)" if va["brk"]
+                         else "none in last 10 bars")
+                ud_v = "∞" if np.isinf(va["ud"]) else f"{va['ud']:.2f}"
+                cards_k.append(kcard(
+                    "📊 Volume", va["verdict"].split(" ", 1)[1].split(":")[0], va["vcol"],
+                    [("Latest volume", fmt_vol(va["vol"])), ("20-bar average", fmt_vol(va["avg"])),
+                     ("Relative volume (RVOL)", f"{va['rvol']:.2f}×"),
+                     ("Last 5 vs average", nz(va["part"], "{:.2f}×")),
+                     ("Up / down volume (20)", ud_v), ("Breakout check", brk_v)],
+                    " ".join(va["why"][:2]) + (" " + va["flags"][0][1] + "." if va["flags"] else "")))
+
+            # 5. ADX
+            if ax:
+                cards_k.append(kcard(
+                    "📐 Trend strength (ADX)", ax["regime"], regime_color(ax["regime"]),
+                    [("ADX (14)", f"{ax['adx']:.1f} ({'rising' if ax['rising'] else 'falling' if ax['falling'] else 'flat'},"
+                                  f" was {ax['adx5']:.1f})"),
+                     ("+DI (buyers)", f"{ax['pdi']:.1f}"), ("−DI (sellers)", f"{ax['mdi']:.1f}"),
+                     ("DI gap", f"{abs(ax['pdi'] - ax['mdi']):.1f} → {'buyers' if ax['pdi'] >= ax['mdi'] else 'sellers'} lead")],
+                    f"ADX measures strength only: < 20 sideways, 20–25 weak, ≥ 25 strong. Direction comes from +DI vs −DI. "
+                    + (ax["notes"][1] if len(ax["notes"]) > 1 else ax["notes"][0])))
+
+            # 6. Volatility & position size
+            if vol:
+                cfg_s = {"capital": float(st.session_state.get("ts_capital", 10000.0)),
+                         "risk_pct": float(st.session_state.get("ts_risk", 1.0)),
+                         "max_loss": float(st.session_state.get("ts_maxloss", 0.0)),
+                         "brk_pct": float(st.session_state.get("ts_brk", 0.08)),
+                         "brk_min": float(st.session_state.get("ts_brkmin", 8.0)),
+                         "platform": float(st.session_state.get("ts_plat", 0.0)),
+                         "us_commission": float(st.session_state.get("ts_uscomm", 0.0))}
+                e_ = ta_plus.round_tick(plan["entry"], ticker)
+                s_ = ta_plus.round_tick(plan["stop"], ticker, "down")
+                ps_ = ta_plus.position_size(e_, s_, ticker, cfg_s)
+                sh_ = ps_["shares"] if ps_ else 0
+                size_txt = (f"{sh_:,} shares" + (f" ({sh_ // 100} lots)" if ticker.endswith('.KL') else "")) if sh_ \
+                    else "0 (stop too far for budget)"
+                cards_k.append(kcard(
+                    "🌡️ Volatility & position size", f"{vol['cls']} volatility", vol_col,
+                    [("ATR (14)", f"{cur}{vol['atr']:.3f}"), ("ATR % of price", f"{vol['atrp']:.2f}%"),
+                     ("Volatility rank", nz(vol["pct"], "{:.0f}th percentile")),
+                     ("Risk budget", f"{cur}{ps_['budget']:,.2f}" if ps_ else "N/A"),
+                     ("Position size", size_txt),
+                     ("Required capital / max loss",
+                      f"{cur}{ps_['cost']:,.0f} / {cur}{ps_['loss']:,.2f}" if sh_ else "–")],
+                    f"Today's ATR% ranks {nz(vol['pct'], '{:.0f}')}th against this stock's last {vol['n']} candles. "
+                    f"Risk per share = entry {cur}{e_:.3f} − stop {cur}{s_:.3f} = {cur}{e_ - s_:.3f}; budget "
+                    f"{cfg_s['risk_pct']:g}% of {cur}{cfg_s['capital']:,.0f} ÷ that, rounded down to "
+                    f"{'100-share lots' if ticker.endswith('.KL') else 'whole shares'}, fees included. Change the "
+                    f"settings in 📋 Trade plan."))
+
+            # 7. Multi-timeframe
+            lab_k = {k: lab for k, lab, _, _ in ta_plus.TIMEFRAMES}
+            mt_rows = [(lab_k[k], f"<span style='color:{P['up'] if 'Bullish' in r_['signal'] else P['down'] if 'Bearish' in r_['signal'] else P['muted']}'>"
+                                  f"{r_['signal']}</span> · {r_['score']:+d}")
+                       for k, r_ in tf_rows.items() if r_.get("available")]
+            mt_col = {"Aligned bullish": P["up"], "Aligned bearish": P["down"], "Conflict": P["warn"]}.get(mtf["swing"], P["muted"])
+            cards_k.append(kcard(
+                "⏱️ Multi-timeframe", f"Swing: {mtf['swing']}", mt_col, mt_rows or [("Timeframes", "N/A")],
+                f"Each timeframe scores trend, EMA alignment, RSI and MACD (±7). Weekly ×3, Daily ×2, 4H ×1 give a swing "
+                f"score of {mtf['swing_score']:+d} / ±{mtf['swing_max']}. "
+                + ("Timeframes disagree: follow the higher timeframe and wait for the lower one to line up."
+                   if mtf["disagree"] else "No timeframes point in opposite directions.")))
+
+            # 8. Candlestick patterns
+            if pats_full:
+                p0 = pats_full[0]
+                perf0 = p0["perf"]
+                pk_col = {"bull": P["up"], "bear": P["down"]}.get(p0["kind"], P["muted"])
+                cards_k.append(kcard(
+                    "🕯️ Candlestick pattern", f"{p0['name']}", pk_col,
+                    [("When", "latest candle" if p0["bars_ago"] == 0 else f"{p0['bars_ago']} candle(s) ago"),
+                     ("Type", {"bull": "Bullish", "bear": "Bearish"}.get(p0["kind"], "Neutral")),
+                     ("Context", f"{p0['context']} ({p0['ctx_grade'].lower()})"),
+                     ("Confirmation", p0["confirmation"]),
+                     ("History in this stock", f"{perf0['win']:.0f}% worked over {perf0['n']} cases (random {perf0['base']:.0f}%)"
+                      if perf0.get("win") is not None else f"insufficient (n={perf0['n']})"),
+                     ("Other patterns (5 candles)", str(len(pats_full) - 1))],
+                    p0["use"] + f" Detected because: {p0['rule']}."))
+            else:
+                cards_k.append(kcard("🕯️ Candlestick pattern", "None", P["muted"],
+                                     [("Last 5 candles", "no recognised pattern")],
+                                     "No pattern means no candle-based signal: rely on levels, trend and volume."))
+
+            # 9. Forecast accuracy
+            if bt_m:
+                acc_col = P["up"] if bt_m["dir_acc"] >= 60 and bt_m["skill"] > 0 else (
+                    P["warn"] if bt_m["dir_acc"] >= 50 else P["down"])
+                cards_k.append(kcard(
+                    "🎯 Forecast accuracy (back-test)", f"{bt_m['dir_acc']:.0f}% direction", acc_col,
+                    [("Forecasts tested", f"{bt_m['n']}"), ("Directional accuracy", f"{bt_m['dir_acc']:.0f}% "
+                                                                                   f"(always-up {bt_m['up_rate']:.0f}%)"),
+                     ("MAE / RMSE", f"{cur}{bt_m['mae']:.3f} / {cur}{bt_m['rmse']:.3f} ({bt_m['mape']:.1f}%)"),
+                     ("Skill vs 'no change'", f"{bt_m['skill']:+.0f}%"),
+                     ("Band coverage 68% / 95%", f"{bt_m['cov68']:.0f}% / {bt_m['cov95']:.0f}%")],
+                    f"Walk-forward test: at each past date the model saw only earlier data. Above 50% direction and "
+                    f"positive skill mean it added value; bands are {ta_plus.calibration_note(bt_m)}."))
+
+            st.markdown("<div class='sech' style='display:flex;align-items:center;gap:10px;margin:18px 0 8px'>"
+                        "<span style='font-size:18px;font-weight:650'>📌 Key numbers from every analysis</span>"
+                        f"<i style='flex:1;height:1px;background:{P['border']}'></i></div>", unsafe_allow_html=True)
+            st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px'>"
+                        + "".join(cards_k) + "</div>", unsafe_allow_html=True)
+            st.markdown("<div class='sech' style='display:flex;align-items:center;gap:10px;margin:22px 0 8px'>"
+                        "<span style='font-size:18px;font-weight:650'>📝 Detailed explanation</span>"
+                        f"<i style='flex:1;height:1px;background:{P['border']}'></i></div>", unsafe_allow_html=True)
             order = ["Overall trend", "Short-term momentum", "Long-term trend", "Support & resistance",
                      "Volume behaviour", "RSI & MACD", "ADX trend strength", "Multi-timeframe", "Volatility",
                      "Bullish scenario", "Bearish scenario", "Suggested entry conditions",
