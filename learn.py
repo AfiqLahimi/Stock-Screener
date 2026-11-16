@@ -243,6 +243,13 @@ GLOSSARY = [
     ("MACD", "Technical analysis", "Momentum indicator. When the MACD line crosses above its signal line, momentum is turning up; crossing below, turning down. Histogram bars show the gap between them."),
     ("ATR", "Technical analysis", "Average True Range: how much a stock typically moves per candle. Used to place stop losses (e.g. 1× ATR below support)."),
     ("Volatility", "Technical analysis", "How wildly price swings. High volatility = bigger profits and bigger losses."),
+    ("Swing high / Swing low", "Technical analysis", "A swing high is a peak with lower highs on both sides; a swing low is a dip with higher lows on both sides. Old swing highs often act as resistance and old swing lows as support."),
+    ("Repeated touches", "Technical analysis", "A price level that price has bounced off (or been rejected at) several times. The more touches, the more traders watch that level, so the stronger it tends to be."),
+    ("Volume Profile", "Technical analysis", "A sideways histogram showing how much volume traded at each price. Prices with lots of volume act like magnets and as support/resistance; thin areas are where price can move fast."),
+    ("POC (Point of Control)", "Technical analysis", "The single price with the most volume traded in the Volume Profile. A very strong support/resistance level."),
+    ("Value Area (VAH / VAL)", "Technical analysis", "The price range where about 70% of volume traded. VAH = top of that range, VAL = bottom. Moving out of the value area often starts a new trend."),
+    ("Fibonacci retracement", "Technical analysis", "Levels at 23.6%, 38.2%, 50%, 61.8% and 78.6% of a big move. After a rise, pullbacks often pause at 38.2%-61.8% before continuing. 61.8% is called the 'golden ratio'."),
+    ("Shariah-compliant", "Basics", "A stock that the Securities Commission Malaysia's Shariah Advisory Council has approved under Islamic principles (business activities and debt/cash levels within limits). The list is updated every May and November."),
     ("Divergence", "Technical analysis", "When price makes a new high but RSI/MACD doesn't (or vice versa). A warning that the trend may be weakening."),
     # Risk
     ("Risk : Reward (R:R)", "Risk management", "How much you could gain vs how much you could lose. 1:2 means risking RM100 to make RM200. Aim for at least 1:2."),

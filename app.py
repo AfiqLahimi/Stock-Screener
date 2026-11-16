@@ -81,6 +81,17 @@ def normalise(sym: str) -> str:
 NAMES = {}  # filled from the Bursa-wide screener (ticker -> short name)
 
 
+@st.cache_data(show_spinner=False)
+def load_shariah():
+    """SC Shariah Advisory Council list (bundled as shariah.csv). Returns (set of tickers, as-of text)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shariah.csv")
+    if not os.path.exists(path):
+        return set(), None
+    df = pd.read_csv(path, dtype=str)
+    asof = df["as_of"].dropna().iloc[0] if "as_of" in df and df["as_of"].notna().any() else None
+    return {c.strip().zfill(4) + ".KL" for c in df["code"].dropna()}, asof
+
+
 def display_name(t: str) -> str:
     return BURSA.get(t) or US.get(t) or NAMES.get(t) or t
 
@@ -529,9 +540,151 @@ def pill(text, color):
 
 
 # ----------------------------------------------------------------------------
+# Extra support/resistance methods (optional overlays)
+# ----------------------------------------------------------------------------
+EXTRA_OPTS = ["Swing highs/lows", "Repeated touches (3+)", "Volume profile", "Fibonacci retracement"]
+FIB_RATIOS = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+
+
+def _pivots(x: pd.DataFrame, w: int = 5):
+    hi, lo = x["High"].values, x["Low"].values
+    highs, lows = [], []
+    for i in range(w, len(x) - w):
+        if hi[i] == hi[i - w:i + w + 1].max():
+            highs.append((i, float(hi[i])))
+        if lo[i] == lo[i - w:i + w + 1].min():
+            lows.append((i, float(lo[i])))
+    return highs, lows
+
+
+def compute_extra_levels(d: pd.DataFrame, sel, show_bars: int = 120):
+    """Optional extra S/R levels. Returns (overlay data for the chart, rows for the levels table)."""
+    x = d.tail(show_bars)
+    price, atr = float(d["Close"].iloc[-1]), float(d["ATR"].iloc[-1])
+    out, rows = {}, []
+
+    if "Swing highs/lows" in sel:
+        highs, lows = _pivots(x, 5)
+        out["swings"] = {"hi": highs, "lo": lows,
+                         "lv_hi": [p for _, p in highs[-3:]], "lv_lo": [p for _, p in lows[-3:]]}
+        rows += [{"Method": "Swing high", "Level": p, "Note": "recent swing"} for p in out["swings"]["lv_hi"]]
+        rows += [{"Method": "Swing low", "Level": p, "Note": "recent swing"} for p in out["swings"]["lv_lo"]]
+
+    if "Repeated touches (3+)" in sel:
+        full = d.tail(250)
+        hs, ls = _pivots(full, 3)
+        pts = sorted([p for _, p in hs + ls])
+        tol = max(0.4 * atr, price * 0.006)
+        clusters = []
+        for p in pts:
+            if clusters and p - clusters[-1][-1] <= tol:
+                clusters[-1].append(p)
+            else:
+                clusters.append([p])
+        lo_v, hi_v = float(x["Low"].min()) * 0.97, float(x["High"].max()) * 1.03
+        touch = [(float(np.mean(c)), len(c)) for c in clusters if len(c) >= 3 and lo_v <= np.mean(c) <= hi_v]
+        touch = sorted(touch, key=lambda t: -t[1])[:6]
+        out["touch"] = touch
+        rows += [{"Method": "Repeated touches", "Level": l, "Note": f"touched {n}x"} for l, n in touch]
+
+    if "Volume profile" in sel:
+        tp = ((x["High"] + x["Low"] + x["Close"]) / 3).values
+        vol = x["Volume"].fillna(0).values
+        lo_p, hi_p = float(x["Low"].min()), float(x["High"].max())
+        if hi_p > lo_p and vol.sum() > 0:
+            edges = np.linspace(lo_p, hi_p, 31)
+            idx = np.clip(np.digitize(tp, edges) - 1, 0, 29)
+            prof = np.bincount(idx, weights=vol, minlength=30)
+            poc_i = int(prof.argmax())
+            # value area: expand from POC until 70% of volume is covered
+            lo_i = hi_i = poc_i
+            covered = prof[poc_i]
+            while covered < 0.7 * prof.sum() and (lo_i > 0 or hi_i < 29):
+                up = prof[hi_i + 1] if hi_i < 29 else -1
+                dn = prof[lo_i - 1] if lo_i > 0 else -1
+                if up >= dn:
+                    hi_i += 1
+                    covered += prof[hi_i]
+                else:
+                    lo_i -= 1
+                    covered += prof[lo_i]
+            mid = (edges[:-1] + edges[1:]) / 2
+            out["vp"] = {"edges": edges, "vol": prof, "poc": float(mid[poc_i]),
+                         "vah": float(edges[hi_i + 1]), "val": float(edges[lo_i])}
+            rows += [{"Method": "Volume profile", "Level": out["vp"]["poc"], "Note": "POC (most traded price)"},
+                     {"Method": "Volume profile", "Level": out["vp"]["vah"], "Note": "Value area high"},
+                     {"Method": "Volume profile", "Level": out["vp"]["val"], "Note": "Value area low"}]
+
+    if "Fibonacci retracement" in sel:
+        y = x.tail(min(len(x), 120))
+        hi_pos, lo_pos = int(y["High"].values.argmax()), int(y["Low"].values.argmin())
+        hi_p, lo_p = float(y["High"].iloc[hi_pos]), float(y["Low"].iloc[lo_pos])
+        up_move = lo_pos < hi_pos  # low came first -> retracing an up-move
+        lv = [(r, hi_p - r * (hi_p - lo_p)) if up_move else (r, lo_p + r * (hi_p - lo_p)) for r in FIB_RATIOS]
+        out["fib"] = {"levels": lv, "up": up_move, "hi": hi_p, "lo": lo_p}
+        rows += [{"Method": "Fibonacci", "Level": p, "Note": f"{r * 100:.1f}% of the {'up' if up_move else 'down'}-move"}
+                 for r, p in lv if 0 < r < 1]
+
+    for r in rows:
+        r["Distance %"] = (r["Level"] / price - 1) * 100
+        r["Role"] = "Resistance (above)" if r["Level"] > price else "Support (below)"
+    return out, rows
+
+
+# ----------------------------------------------------------------------------
 # Chart
 # ----------------------------------------------------------------------------
-def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120):
+def _draw_extras(fig, ex, labels):
+    gold, teal, pink = "#e3c46a", "#5ec8d8", "#d68ad6"
+    if "vp" in ex:
+        vp = ex["vp"]
+        mx = vp["vol"].max() or 1
+        for i, v in enumerate(vp["vol"]):
+            if v <= 0:
+                continue
+            w = 0.22 * v / mx
+            mid = (vp["edges"][i] + vp["edges"][i + 1]) / 2
+            col = P["warn"] if abs(mid - vp["poc"]) < 1e-9 else (
+                P["accent"] if vp["val"] <= mid <= vp["vah"] else P["muted"])
+            fig.add_shape(type="rect", xref="x domain", yref="y", x0=1 - w, x1=1,
+                          y0=vp["edges"][i], y1=vp["edges"][i + 1], fillcolor=col, opacity=0.28,
+                          line_width=0, layer="below")
+        fig.add_hline(y=vp["poc"], line=dict(color=P["warn"], width=1.4, dash="dashdot"), row=1, col=1,
+                      annotation_text=f"POC {vp['poc']:.3f}", annotation_position="bottom left",
+                      annotation_font=dict(color=P["warn"], size=11))
+        for k, lab in (("vah", "VAH"), ("val", "VAL")):
+            fig.add_hline(y=vp[k], line=dict(color=rgba(P["accent"], .55), width=1, dash="dot"), row=1, col=1,
+                          annotation_text=f"{lab} {vp[k]:.3f}", annotation_position="bottom left",
+                          annotation_font=dict(color=P["accent"], size=10))
+    if "fib" in ex:
+        for r, p in ex["fib"]["levels"]:
+            strong = r in (0.382, 0.5, 0.618)
+            fig.add_hline(y=p, line=dict(color=rgba(gold, .75 if strong else .4), width=1.2 if strong else 0.9,
+                                         dash="dot"), row=1, col=1,
+                          annotation_text=f"Fib {r * 100:.1f}% · {p:.3f}", annotation_position="top left",
+                          annotation_font=dict(color=gold, size=10))
+    if "touch" in ex:
+        for lvl, n in ex["touch"]:
+            fig.add_hline(y=lvl, line=dict(color=rgba(teal, .8), width=0.8 + min(n, 8) * 0.15, dash="longdash"),
+                          row=1, col=1, annotation_text=f"⟷ {n}x · {lvl:.3f}", annotation_position="top left",
+                          annotation_font=dict(color=teal, size=10))
+    if "swings" in ex:
+        sw = ex["swings"]
+        fig.add_trace(go.Scatter(mode="markers", x=[labels[i] for i, _ in sw["hi"]], y=[p * 1.006 for _, p in sw["hi"]],
+                                 marker=dict(symbol="triangle-down", size=9, color=pink), name="Swing high",
+                                 hovertemplate="Swing high %{customdata:.3f}<extra></extra>",
+                                 customdata=[p for _, p in sw["hi"]]), 1, 1)
+        fig.add_trace(go.Scatter(mode="markers", x=[labels[i] for i, _ in sw["lo"]], y=[p * 0.994 for _, p in sw["lo"]],
+                                 marker=dict(symbol="triangle-up", size=9, color=teal), name="Swing low",
+                                 hovertemplate="Swing low %{customdata:.3f}<extra></extra>",
+                                 customdata=[p for _, p in sw["lo"]]), 1, 1)
+        for p in sw["lv_hi"]:
+            fig.add_hline(y=p, line=dict(color=rgba(pink, .45), width=1, dash="dot"), row=1, col=1)
+        for p in sw["lv_lo"]:
+            fig.add_hline(y=p, line=dict(color=rgba(teal, .45), width=1, dash="dot"), row=1, col=1)
+
+
+def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=None):
     x = d.tail(show_bars)
     fmt = "%d %b %y" if interval in ("1d", "1wk") else "%d %b %H:%M"
     labels = [ts.strftime(fmt) for ts in x.index]
@@ -546,6 +699,9 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120):
     for n in (20, 50, 200):
         fig.add_trace(go.Scatter(x=labels, y=x[f"EMA{n}"], name=f"EMA{n}",
                                  line=dict(width=1.4, color=P[f"ema{n}"]), opacity=0.9), 1, 1)
+
+    if extra:
+        _draw_extras(fig, extra, labels)
 
     if fc:
         lb = min(fc["lookback"], len(labels))
@@ -605,6 +761,15 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120):
     fig.update_xaxes(type="category", nticks=8, showgrid=False, linecolor=P["border"], tickfont=dict(color=P["muted"]),
                      showspikes=True, spikecolor=P["muted"], spikethickness=1, spikedash="dot")
     fig.update_yaxes(gridcolor=P["grid"], zeroline=False, linecolor=P["border"], tickfont=dict(color=P["muted"]))
+    # focus the price axis on price action + key levels (a far-away EMA200 shouldn't squash the candles)
+    lo_v = [float(x["Low"].min()), sup[0][0], plan["stop"]]
+    hi_v = [float(x["High"].max()), res[0][0]]
+    if fc:
+        lo_v.append(float(fc["lo1"][-1]))
+        hi_v.append(float(fc["hi1"][-1]))
+    lo_r, hi_r = min(lo_v), max(hi_v)
+    pad = (hi_r - lo_r) * 0.05
+    fig.update_yaxes(range=[lo_r - pad, hi_r + pad], row=1, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1, title_font=dict(color=P["muted"], size=11))
     fig.update_yaxes(title_text="MACD", row=3, col=1, title_font=dict(color=P["muted"], size=11))
     return fig
@@ -694,6 +859,11 @@ with st.sidebar:
     custom = ""
     if market == "My own list":
         custom = st.text_area("Tickers (comma separated)", "MAYBANK, TENAGA, 5398, NVDA, TSLA, AAPL")
+    shariah_set, shariah_asof = load_shariah()
+    shariah_mode = "All"
+    if shariah_set and market.startswith("Bursa"):
+        shariah_mode = st.radio("Shariah status", ["All", "Shariah-compliant only", "Non-Shariah only"],
+                                horizontal=False, help=f"Securities Commission Malaysia list ({shariah_asof})")
     bursa_filter = None
     if market == "Bursa: all stocks":
         with st.expander("🔧 Filter Bursa stocks", expanded=True):
@@ -741,6 +911,10 @@ if market == "Bursa: all stocks":
         if secs:
             f = f[f["sector"].isin(secs)]
         f = f[(f["price"].fillna(0) >= min_price) & (f["value"] >= min_value)]
+        if shariah_mode == "Shariah-compliant only":
+            f = f[f["ticker"].isin(shariah_set)]
+        elif shariah_mode == "Non-Shariah only":
+            f = f[~f["ticker"].isin(shariah_set)]
         f = f.sort_values("value", ascending=False)
         universe = tuple(f["ticker"].head(max_n))
         sector_map = dict(zip(bursa_all["ticker"], bursa_all["sector"]))
@@ -749,6 +923,10 @@ if market == "Bursa: all stocks":
                        f"scanning {len(universe):,}")
 elif market == "Bursa: top 30 blue chips":
     universe = tuple(BURSA.keys())
+    if shariah_mode == "Shariah-compliant only":
+        universe = tuple(t for t in universe if t in shariah_set)
+    elif shariah_mode == "Non-Shariah only":
+        universe = tuple(t for t in universe if t not in shariah_set)
 elif market == "US":
     universe = tuple(US.keys())
 else:
@@ -774,7 +952,9 @@ with tab_scr:
                 last, prev = d.iloc[-1], d.iloc[-2]
                 price = float(last["Close"])
                 rows.append({
-                    "Name": display_name(t), "Ticker": t, "Price": price,
+                    "Name": display_name(t), "Ticker": t,
+                    **({"Shariah": "✅" if t in shariah_set else "–"} if shariah_set and t.endswith(".KL") else {}),
+                    "Price": price,
                     "Change %": (price / float(prev["Close"]) - 1) * 100,
                     "Signal": f"{LABEL_DOT[label]} {label}", "_label": label, "Score": sc,
                     "RSI": float(last["RSI"]),
@@ -867,9 +1047,26 @@ with tab_an:
   <div style="margin-left:auto" class="muted">Last data {d.index[-1].strftime('%d %b %Y %H:%M')}<br>{tf_name}</div>
 </div></div>""", unsafe_allow_html=True)
 
-        show_fc = st.toggle("Show trend forecast on chart", value=True)
-        st.plotly_chart(make_chart(d, sup, res, plan, display_name(ticker), interval, fc if show_fc else None),
+        t1, t2 = st.columns([1, 3])
+        show_fc = t1.toggle("Show trend forecast", value=True)
+        extra_sel = t2.multiselect("Extra support / resistance (optional)", EXTRA_OPTS, default=[],
+                                   placeholder="Add swing highs/lows, repeated touches, volume profile, Fibonacci…",
+                                   key="extra_sel")
+        extra, extra_rows = compute_extra_levels(d, extra_sel) if extra_sel else ({}, [])
+        st.plotly_chart(make_chart(d, sup, res, plan, display_name(ticker), interval, fc if show_fc else None,
+                                   extra=extra),
                         width="stretch", config={"displaylogo": False, "scrollZoom": True})
+        if extra_sel:
+            legend_bits = {
+                "Swing highs/lows": "▼ pink / ▲ teal = swing highs / lows, dotted = the 3 most recent of each",
+                "Repeated touches (3+)": "teal long-dash ⟷ = price levels touched 3+ times (thicker = more touches)",
+                "Volume profile": "bars on the right = volume traded at each price · orange POC = most traded "
+                                  "price · VAH/VAL = range holding 70% of volume",
+                "Fibonacci retracement": "gold dotted = Fibonacci levels of the latest big swing "
+                                         "(38.2%, 50%, 61.8% are the key ones)",
+            }
+            st.markdown("<div class='note'>" + " · ".join(legend_bits[k] for k in extra_sel) + "</div>",
+                        unsafe_allow_html=True)
         st.markdown(f"<div class='note'>Green band = buy zone · red band = sell zone · dashed orange = stop loss · "
                     f"S/R lines show how many times price touched them · blue dashed = forecast with 68% (darker) "
                     f"and 95% (lighter) ranges</div>", unsafe_allow_html=True)
@@ -944,7 +1141,7 @@ market moves can break any trend, so treat it as a guide, not a prediction. R² 
 <div class="card"><h3>Candlestick patterns · last 5 candles</h3>{prow}
 <div class="note">Meanings are in 🎓 Learn → Candlestick Patterns.</div></div>""", unsafe_allow_html=True)
 
-        with st.expander("Support & resistance levels (table)"):
+        with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
             lv = pd.DataFrame(
                 [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
                 + [{"Type": "▶ Current price", "Level": price, "Touches": "", "Distance %": 0.0}]
@@ -952,6 +1149,13 @@ market moves can break any trend, so treat it as a guide, not a prediction. R² 
             st.dataframe(lv, hide_index=True, width="stretch",
                          column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
                                         "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
+            if extra_rows:
+                st.markdown("**Extra levels**")
+                ex_df = pd.DataFrame(extra_rows).sort_values("Level", ascending=False)
+                st.dataframe(ex_df[["Method", "Role", "Level", "Distance %", "Note"]], hide_index=True,
+                             width="stretch",
+                             column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
+                                            "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
 
 # ---------------- Heatmap ----------------
 with tab_hm:
