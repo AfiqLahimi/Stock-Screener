@@ -528,7 +528,7 @@ def tradingview_widget(symbol: str, height=800, interval="D"):
 # ----------------------------------------------------------------------------
 st.markdown(f"""
 <style>
-.block-container{{padding-top:1.6rem;padding-bottom:3rem;max-width:1520px}}
+.block-container{{padding-top:4.5rem;padding-bottom:3rem;max-width:1520px}}
 h1,h2,h3,h4{{letter-spacing:-0.01em}}
 /* metric cards */
 [data-testid="stMetric"]{{background:{P['card']};border:1px solid {P['border']};border-radius:14px;padding:14px 18px}}
