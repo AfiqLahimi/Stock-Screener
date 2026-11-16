@@ -188,6 +188,10 @@ def render_dividends(universe, prices, display_name, P, pill):
     if not universe:
         st.info("Pick a market or enter tickers in the sidebar.")
         return
+    if len(universe) > 60:
+        st.info(f"Your list has {len(universe)} stocks. To keep it fast, dividends are shown for the **60 most "
+                f"traded**. Use the sector filter in the sidebar to see others.")
+        universe = tuple(universe)[:60]
     with st.spinner("Loading dividend history… (first load can take ~20 seconds)"):
         raw = load_dividends(tuple(universe))
     rows, series = [], {}
@@ -629,12 +633,12 @@ def _tv_heatmap(source, height, P):
         components.html(html, height=height + 4)
 
 
-def render_heatmap(universe, display_name, P, load_many, analyse):
+def render_heatmap(universe, display_name, P, load_many, analyse, sector_map=None):
     st.markdown("### 🗺️ Market heatmap")
     t_mine, t_tv = st.tabs(["📋 My list (Bursa / US)", "🇺🇸 Whole US market (TradingView)"])
 
     with t_mine:
-        _heatmap_mine(universe, display_name, P, load_many, analyse)
+        _heatmap_mine(universe, display_name, P, load_many, analyse, sector_map or SECTORS)
 
     with t_tv:
         c1, c2 = st.columns([1, 2])
@@ -646,7 +650,7 @@ def render_heatmap(universe, display_name, P, load_many, analyse):
         _tv_heatmap(src, tv_h, P)
 
 
-def _heatmap_mine(universe, display_name, P, load_many, analyse):
+def _heatmap_mine(universe, display_name, P, load_many, analyse, sector_map):
     if True:
         if not universe:
             st.info("Pick a market or enter tickers in the sidebar.")
@@ -663,7 +667,7 @@ def _heatmap_mine(universe, display_name, P, load_many, analyse):
             c = df["Close"].dropna()
             if len(c) < 30:
                 continue
-            row = {"t": t, "name": display_name(t), "sector": SECTORS.get(t, "Other"),
+            row = {"t": t, "name": display_name(t), "sector": sector_map.get(t, "Other"),
                    "price": float(c.iloc[-1]),
                    "Today": _pct(c, 1), "1 week": _pct(c, 5), "1 month": _pct(c, 21), "3 months": _pct(c, 63),
                    "value": float((df["Close"] * df["Volume"]).tail(20).mean())}

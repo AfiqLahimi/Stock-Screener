@@ -67,11 +67,22 @@ def normalise(sym: str) -> str:
         s = s.split(":", 1)[1]
     if s.isdigit() and len(s) == 4:
         return s + ".KL"
+    # full-Bursa names (e.g. "SKA" or "SKA CAPITAL")
+    if NAMES:
+        up = {v.upper().replace(" ", ""): k for k, v in NAMES.items()}
+        if s in up:
+            return up[s]
+        hits = [k for n, k in up.items() if n.startswith(s)]
+        if len(hits) == 1:
+            return hits[0]
     return s
 
 
+NAMES = {}  # filled from the Bursa-wide screener (ticker -> short name)
+
+
 def display_name(t: str) -> str:
-    return BURSA.get(t) or US.get(t) or t
+    return BURSA.get(t) or US.get(t) or NAMES.get(t) or t
 
 
 def tv_symbol(t: str) -> str:
@@ -114,8 +125,7 @@ def load_one(ticker: str, interval: str, period: str) -> pd.DataFrame:
     return _clean(d)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def load_many(tickers: tuple, interval: str, period: str) -> dict:
+def _download_many(tickers: tuple, interval: str, period: str) -> dict:
     if DEMO:
         return {t: _demo(t, interval) for t in tickers}
     raw = yf.download(list(tickers), period=period, interval=interval, group_by="ticker",
@@ -130,6 +140,105 @@ def load_many(tickers: tuple, interval: str, period: str) -> dict:
         except Exception:
             pass
     return out
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_many(tickers: tuple, interval: str, period: str) -> dict:
+    return _download_many(tickers, interval, period)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_many_big(tickers: tuple, interval: str, period: str) -> dict:
+    """Same as load_many, cached for 10 minutes, for big lists (Bursa-wide scans)."""
+    return _download_many(tickers, interval, period)
+
+
+def get_many(tickers: tuple, interval: str, period: str) -> dict:
+    """Pick the cache by list size: small lists refresh every minute, big ones every 10 minutes."""
+    return load_many(tickers, interval, period) if len(tickers) <= 60 else load_many_big(tickers, interval, period)
+
+
+YF_SECTORS = ["Basic Materials", "Communication Services", "Consumer Cyclical", "Consumer Defensive", "Energy",
+              "Financial Services", "Healthcare", "Industrials", "Real Estate", "Technology", "Utilities"]
+
+
+def _short_name(n):
+    n = (n or "").strip()
+    for suf in (" BERHAD", " BHD", " Berhad", " Bhd", " BHD."):
+        if n.endswith(suf):
+            n = n[: -len(suf)]
+    return n[:22]
+
+
+def _demo_bursa_all():
+    rng = np.random.default_rng(7)
+    rows = []
+    for i in range(420):
+        code = f"{rng.integers(0, 9999):04d}.KL"
+        price = float(np.round(np.exp(rng.normal(0, 1.1)), 3))
+        vol = float(rng.lognormal(13, 1.5))
+        rows.append({"ticker": code, "name": f"DEMO {i}", "sector": YF_SECTORS[i % len(YF_SECTORS)],
+                     "price": price, "chg": float(rng.normal(0, 2)), "volume": vol,
+                     "avg_volume": vol, "mcap": price * float(rng.lognormal(19, 1.2)),
+                     "pe": float(rng.uniform(5, 40)), "div_yield": float(rng.uniform(0, 7))})
+    for t, nm in BURSA.items():
+        rows.append({"ticker": t, "name": nm, "sector": "Financial Services", "price": 10.0, "chg": 0.5,
+                     "volume": 5e6, "avg_volume": 5e6, "mcap": 5e10, "pe": 12.0, "div_yield": 4.0})
+    return pd.DataFrame(rows).drop_duplicates("ticker")
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def load_bursa_all() -> pd.DataFrame:
+    """Every stock listed on Bursa Malaysia (Yahoo exchange code KLS), with sector, via Yahoo's screener."""
+    if DEMO:
+        return _demo_bursa_all()
+    from concurrent.futures import ThreadPoolExecutor
+    from yfinance import EquityQuery
+
+    base = EquityQuery("eq", ["exchange", "KLS"])
+
+    def pull(q):
+        out, off = [], 0
+        while off < 3000:
+            try:
+                r = yf.screen(q, offset=off, size=250, sortField="intradaymarketcap", sortAsc=False)
+            except Exception:
+                break
+            qs = (r or {}).get("quotes") or []
+            out += qs
+            off += len(qs)
+            if not qs or off >= int((r or {}).get("total") or 0):
+                break
+        return out
+
+    rows = {}
+    for q in pull(base):
+        sym = q.get("symbol")
+        if not sym or not sym.endswith(".KL"):
+            continue
+        price = q.get("regularMarketPrice")
+        rows[sym] = {"ticker": sym, "name": _short_name(q.get("shortName") or q.get("longName") or sym),
+                     "sector": "Other", "price": price, "chg": q.get("regularMarketChangePercent"),
+                     "volume": q.get("regularMarketVolume"), "avg_volume": q.get("averageDailyVolume3Month"),
+                     "mcap": q.get("marketCap"), "pe": q.get("trailingPE"),
+                     "div_yield": q.get("dividendYield") if q.get("dividendYield") is not None
+                     else (q.get("trailingAnnualDividendYield") or 0) * 100}
+
+    def by_sector(sec):
+        return sec, pull(EquityQuery("and", [base, EquityQuery("eq", ["sector", sec])]))
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for sec, qs in ex.map(by_sector, YF_SECTORS):
+            for q in qs:
+                sym = q.get("symbol")
+                if sym in rows:
+                    rows[sym]["sector"] = sec
+    df = pd.DataFrame(list(rows.values()))
+    if df.empty:
+        return df
+    for c in ("price", "chg", "volume", "avg_volume", "mcap", "pe", "div_yield"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
 
 
 # ----------------------------------------------------------------------------
@@ -580,10 +689,25 @@ a{{color:{P['accent']}}}
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
-    market = st.radio("Screener market", ["Bursa Malaysia", "US", "My own list"], index=0)
+    market = st.radio("Screener market", ["Bursa: all stocks", "Bursa: top 30 blue chips", "US", "My own list"],
+                      index=0)
     custom = ""
     if market == "My own list":
         custom = st.text_area("Tickers (comma separated)", "MAYBANK, TENAGA, 5398, NVDA, TSLA, AAPL")
+    bursa_filter = None
+    if market == "Bursa: all stocks":
+        with st.expander("🔧 Filter Bursa stocks", expanded=True):
+            sectors_sel = st.multiselect("Sectors", YF_SECTORS + ["Other"], default=[],
+                                         placeholder="All sectors")
+            min_price = st.number_input("Min price (RM)", 0.0, 100.0, 0.10, 0.05, format="%.2f",
+                                        help="Skip very cheap (penny) stocks")
+            min_value = st.select_slider("Min daily trading value (RM)",
+                                         [0, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000],
+                                         value=100_000, format_func=lambda v: f"{v:,.0f}",
+                                         help="Skip stocks that rarely trade (hard to buy/sell)")
+            max_n = st.select_slider("Scan up to (most traded first)", [50, 100, 200, 300, 500, 1000],
+                                     value=100, help="More stocks = slower first load")
+        bursa_filter = (tuple(sectors_sel), min_price, min_value, max_n)
     tf_name = st.selectbox("Timeframe", list(INTERVALS.keys()), index=0)
     interval, period, unit = INTERVALS[tf_name]
     st.divider()
@@ -601,7 +725,29 @@ st.markdown(f"""
 <div class="sub">Bursa Malaysia & US · signals, support/resistance, trend forecast</div></div>
 <div class="live"><i></i>Updated {now_txt} MYT</div></div>""", unsafe_allow_html=True)
 
-if market == "Bursa Malaysia":
+bursa_all = pd.DataFrame()
+sector_map = None
+if market == "Bursa: all stocks":
+    with st.spinner("Loading the full Bursa list… (first time only, ~20 seconds)"):
+        bursa_all = load_bursa_all()
+    if bursa_all.empty:
+        st.warning("Couldn't load the full Bursa list right now, showing the top 30 instead.")
+        universe = tuple(BURSA.keys())
+    else:
+        NAMES.update(dict(zip(bursa_all["ticker"], bursa_all["name"])))
+        secs, min_price, min_value, max_n = bursa_filter
+        f = bursa_all.copy()
+        f["value"] = f["price"].fillna(0) * f["avg_volume"].fillna(0)
+        if secs:
+            f = f[f["sector"].isin(secs)]
+        f = f[(f["price"].fillna(0) >= min_price) & (f["value"] >= min_value)]
+        f = f.sort_values("value", ascending=False)
+        universe = tuple(f["ticker"].head(max_n))
+        sector_map = dict(zip(bursa_all["ticker"], bursa_all["sector"]))
+        with st.sidebar:
+            st.caption(f"📋 {len(bursa_all):,} stocks on Bursa · {len(f):,} match your filter · "
+                       f"scanning {len(universe):,}")
+elif market == "Bursa: top 30 blue chips":
     universe = tuple(BURSA.keys())
 elif market == "US":
     universe = tuple(US.keys())
@@ -619,7 +765,7 @@ with tab_scr:
         st.info("Enter at least one ticker in the sidebar.")
     else:
         with st.spinner(f"Scanning {len(universe)} stocks..."):
-            data = load_many(universe, interval, period)
+            data = get_many(universe, interval, period)
         prices = {t: float(v["Close"].iloc[-1]) for t, v in data.items() if len(v)}
         for t, df in data.items():
             try:
@@ -809,7 +955,7 @@ market moves can break any trend, so treat it as a guide, not a prediction. R² 
 
 # ---------------- Heatmap ----------------
 with tab_hm:
-    extras.render_heatmap(universe, display_name, P, load_many, analyse)
+    extras.render_heatmap(universe, display_name, P, get_many, analyse, sector_map)
 
 # ---------------- Dividends ----------------
 with tab_div:
