@@ -580,3 +580,158 @@ the stock exchange.
 - Check **use of proceeds**: expansion is better than mostly repaying debt or cashing out owners.
 - New listings have no trading history, so technical signals in this app need a few months of data to be useful.
 """)
+
+
+# ============================================================================
+# HEATMAP
+# ============================================================================
+SECTORS = {
+    # Bursa
+    "1155.KL": "Financials", "1295.KL": "Financials", "1023.KL": "Financials", "1066.KL": "Financials",
+    "5819.KL": "Financials", "5347.KL": "Utilities", "4677.KL": "Utilities", "6033.KL": "Utilities",
+    "5225.KL": "Healthcare", "5168.KL": "Healthcare", "7113.KL": "Healthcare",
+    "5183.KL": "Energy & Chemicals", "5681.KL": "Energy & Chemicals", "3816.KL": "Transport",
+    "5285.KL": "Plantation", "1961.KL": "Plantation", "2445.KL": "Plantation",
+    "5398.KL": "Construction & Property", "5211.KL": "Construction & Property",
+    "0166.KL": "Technology", "0128.KL": "Technology", "0138.KL": "Technology",
+    "6947.KL": "Telecom", "6888.KL": "Telecom", "4863.KL": "Telecom",
+    "4707.KL": "Consumer", "7084.KL": "Consumer", "5296.KL": "Consumer", "3182.KL": "Consumer", "4715.KL": "Consumer",
+    # US
+    "NVDA": "Technology", "AAPL": "Technology", "MSFT": "Technology", "AVGO": "Technology", "AMD": "Technology",
+    "ORCL": "Technology", "CRM": "Technology", "INTC": "Technology", "MU": "Technology", "PLTR": "Technology",
+    "GOOGL": "Communication", "META": "Communication", "NFLX": "Communication", "DIS": "Communication",
+    "AMZN": "Consumer", "TSLA": "Consumer", "COST": "Consumer", "WMT": "Consumer",
+    "JPM": "Financials", "V": "Financials", "MA": "Financials", "LLY": "Healthcare", "UNH": "Healthcare",
+    "XOM": "Energy", "BA": "Industrials", "SPY": "ETF", "QQQ": "ETF",
+}
+
+
+def _pct(close, n):
+    if len(close) <= n:
+        return None
+    return (float(close.iloc[-1]) / float(close.iloc[-1 - n]) - 1) * 100
+
+
+def _tv_heatmap(source, height, P):
+    html = f"""<!DOCTYPE html><html><head><style>html,body{{margin:0;height:{height}px;background:{P['bg']}}}</style></head>
+<body><div class="tradingview-widget-container" style="height:{height}px;width:100%">
+<div class="tradingview-widget-container__widget" style="height:{height}px;width:100%"></div>
+<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js" async>
+{{"exchanges": [], "dataSource": "{source}", "grouping": "sector", "blockSize": "market_cap_basic",
+  "blockColor": "change", "locale": "en", "symbolUrl": "", "colorTheme": "dark", "hasTopBar": true,
+  "isDataSetEnabled": true, "isZoomEnabled": true, "hasSymbolTooltip": true, "isMonoSize": false,
+  "width": "100%", "height": {height}}}
+</script></div></body></html>"""
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=height + 4)
+    else:
+        import streamlit.components.v1 as components
+        components.html(html, height=height + 4)
+
+
+def render_heatmap(universe, display_name, P, load_many, analyse):
+    st.markdown("### 🗺️ Market heatmap")
+    t_mine, t_tv = st.tabs(["📋 My list (Bursa / US)", "🇺🇸 Whole US market (TradingView)"])
+
+    with t_mine:
+        _heatmap_mine(universe, display_name, P, load_many, analyse)
+
+    with t_tv:
+        c1, c2 = st.columns([1, 2])
+        src = c1.selectbox("Index", ["SPX500", "NASDAQ100"], key="tvhm_src",
+                           format_func=lambda v: {"SPX500": "S&P 500", "NASDAQ100": "Nasdaq 100"}[v])
+        tv_h = c2.slider("Height (px)", 500, 1200, 750, 50, key="tvhm_h")
+        st.caption("TradingView heatmap of the whole index, sized by market cap. Data may be delayed ~15 min. "
+                   "Hover a box for details.")
+        _tv_heatmap(src, tv_h, P)
+
+
+def _heatmap_mine(universe, display_name, P, load_many, analyse):
+    if True:
+        if not universe:
+            st.info("Pick a market or enter tickers in the sidebar.")
+            return
+        c1, c2 = st.columns([2, 1])
+        metric = c1.segmented_control("Colour by", ["Today", "1 week", "1 month", "3 months", "Signal score"],
+                                      default="Today", key="hm_metric") or "Today"
+        size_by = c2.segmented_control("Box size", ["Trading value", "Equal"], default="Trading value",
+                                       key="hm_size") or "Trading value"
+        with st.spinner("Building heatmap…"):
+            data = load_many(tuple(universe), "1d", "1y")
+        rows = []
+        for t, df in data.items():
+            c = df["Close"].dropna()
+            if len(c) < 30:
+                continue
+            row = {"t": t, "name": display_name(t), "sector": SECTORS.get(t, "Other"),
+                   "price": float(c.iloc[-1]),
+                   "Today": _pct(c, 1), "1 week": _pct(c, 5), "1 month": _pct(c, 21), "3 months": _pct(c, 63),
+                   "value": float((df["Close"] * df["Volume"]).tail(20).mean())}
+            try:
+                row["Signal score"] = float(analyse(df)[3])
+            except Exception:
+                row["Signal score"] = None
+            rows.append(row)
+        if not rows:
+            st.warning("No data available.")
+            return
+        h = pd.DataFrame(rows)
+        h["metric"] = h[metric].astype(float)
+        h["size"] = h["value"].clip(lower=1) if size_by == "Trading value" else 1.0
+        if size_by == "Trading value":  # dampen giants so small caps stay visible
+            h["size"] = np.sqrt(h["size"])
+
+        lim = {"Today": 3, "1 week": 6, "1 month": 12, "3 months": 25, "Signal score": 60}[metric]
+        unit = "" if metric == "Signal score" else "%"
+        sec_rows = []
+        for name, g in h.groupby("sector"):
+            sec_rows.append({"sector": name, "size": float(g["size"].sum()),
+                             "metric": float(np.average(g["metric"].fillna(0), weights=g["size"]))})
+        sec = pd.DataFrame(sec_rows)
+        ids = list(sec["sector"]) + list(h["t"])
+        labels = list(sec["sector"]) + list(h["name"])
+        parents = [""] * len(sec) + list(h["sector"])
+        values = list(sec["size"]) + list(h["size"])
+        colors = list(sec["metric"]) + list(h["metric"].fillna(0))
+        fmt = (lambda v: f"{v:+.0f}") if metric == "Signal score" else (lambda v: f"{v:+.2f}%")
+        text = [f"{fmt(v)}" for v in sec["metric"]] + \
+               [f"{fmt(v) if pd.notna(v) else '–'}<br>{p:,.3f}" for v, p in zip(h["metric"], h["price"])]
+        scale = [[0, P["down"]], [0.5, "#2b3242"], [1, P["up"]]]
+        fig = go.Figure(go.Treemap(
+            ids=ids, labels=labels, parents=parents, values=values, branchvalues="total",
+            text=text, texttemplate="<b>%{label}</b><br>%{text}", textposition="middle center",
+            hovertemplate="<b>%{label}</b><br>%{text}<extra></extra>",
+            marker=dict(colors=colors, colorscale=scale, cmid=0, cmin=-lim, cmax=lim,
+                        line=dict(color=P["bg"], width=2), pad=dict(t=22, l=2, r=2, b=2),
+                        colorbar=dict(title=dict(text=unit or "score", font=dict(color=P["muted"])),
+                                      tickfont=dict(color=P["muted"]), thickness=10, len=0.6)),
+            tiling=dict(pad=2), pathbar=dict(visible=False),
+            textfont=dict(family="Inter, sans-serif", color="#ffffff", size=13),
+            insidetextfont=dict(color="#ffffff"),
+        ))
+        fig.update_layout(height=620, margin=dict(l=0, r=0, t=4, b=0), paper_bgcolor="rgba(0,0,0,0)",
+                          font=dict(family="Inter, sans-serif", color=P["text"]))
+        st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
+        st.caption(f"Green = up, red = down ({metric.lower()}). Box size = "
+                   f"{'average daily trading value (last 20 days)' if size_by == 'Trading value' else 'equal'}. "
+                   "Click a sector to zoom in, click again to zoom out. Uses daily data.")
+
+        a, b, c = st.columns(3, gap="medium")
+        hs = h.dropna(subset=["metric"]).sort_values("metric", ascending=False)
+
+        def lst(df):
+            return "".join(
+                f"<div class='reason'><span style='flex:1'>{r['name']}</span>"
+                f"<b style='color:{P['up'] if r['metric'] >= 0 else P['down']}'>{fmt(r['metric'])}</b></div>"
+                for _, r in df.iterrows())
+        a.markdown(f"<div class='card'><h3>🚀 Top gainers · {metric.lower()}</h3>{lst(hs.head(5))}</div>",
+                   unsafe_allow_html=True)
+        b.markdown(f"<div class='card'><h3>📉 Top losers · {metric.lower()}</h3>{lst(hs.tail(5).iloc[::-1])}</div>",
+                   unsafe_allow_html=True)
+        secs = sec.sort_values("metric", ascending=False)
+        srows = "".join(
+            f"<div class='reason'><span style='flex:1'>{r['sector']}</span>"
+            f"<b style='color:{P['up'] if r['metric'] >= 0 else P['down']}'>{fmt(r['metric'])}</b></div>"
+            for _, r in secs.iterrows())
+        c.markdown(f"<div class='card'><h3>🏭 Sectors · {metric.lower()}</h3>{srows}</div>", unsafe_allow_html=True)
+

@@ -608,8 +608,8 @@ elif market == "US":
 else:
     universe = tuple(dict.fromkeys(t for t in (normalise(s) for s in custom.split(",")) if t))
 
-tab_scr, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
-    ["🔎  Screener", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO", "📺  TradingView", "🎓  Learn"])
+tab_scr, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
+    ["🔎  Screener", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO", "📺  TradingView", "🎓  Learn"])
 prices = {}
 
 # ---------------- Screener ----------------
@@ -806,6 +806,10 @@ market moves can break any trend, so treat it as a guide, not a prediction. R² 
             st.dataframe(lv, hide_index=True, width="stretch",
                          column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
                                         "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
+
+# ---------------- Heatmap ----------------
+with tab_hm:
+    extras.render_heatmap(universe, display_name, P, load_many, analyse)
 
 # ---------------- Dividends ----------------
 with tab_div:
