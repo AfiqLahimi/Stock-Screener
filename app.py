@@ -276,6 +276,17 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d["VolAvg20"] = d["Volume"].shift(1).rolling(20).mean()          # average of the previous 20 bars
     d["RVOL"] = (d["Volume"] / d["VolAvg20"]).replace([np.inf, -np.inf], np.nan)
     d["OBV"] = (np.sign(c.diff()).fillna(0) * d["Volume"]).cumsum()
+    # ADX (14) with +DI / -DI, Wilder smoothing
+    up_move = d["High"].diff()
+    down_move = -d["Low"].diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    a = 1 / 14
+    atr_w = tr.ewm(alpha=a, adjust=False).mean()
+    d["PDI"] = 100 * pd.Series(plus_dm, index=d.index).ewm(alpha=a, adjust=False).mean() / atr_w.replace(0, np.nan)
+    d["MDI"] = 100 * pd.Series(minus_dm, index=d.index).ewm(alpha=a, adjust=False).mean() / atr_w.replace(0, np.nan)
+    dx = 100 * (d["PDI"] - d["MDI"]).abs() / (d["PDI"] + d["MDI"]).replace(0, np.nan)
+    d["ADX"] = dx.ewm(alpha=a, adjust=False).mean()
     d["HH20"] = d["High"].shift(1).rolling(20).max()                 # prior 20-bar high / low (breakout levels)
     d["LL20"] = d["Low"].shift(1).rolling(20).min()
     return d
@@ -683,6 +694,92 @@ def fmt_vol(v):
 
 
 # ----------------------------------------------------------------------------
+# ADX trend regime
+# ----------------------------------------------------------------------------
+ADX_STRONG, ADX_WEAK = 25, 20
+REGIME_COLOR_KEY = {"Strong Bullish Trend": "up", "Weak Bullish Trend": "up_soft", "Strong Bearish Trend": "down",
+                    "Weak Bearish Trend": "down_soft", "Sideways Market": "muted"}
+
+
+def adx_regime(adx, pdi, mdi):
+    """ADX = strength only; +DI vs -DI = direction."""
+    if pd.isna(adx) or pd.isna(pdi) or pd.isna(mdi):
+        return "Sideways Market"
+    if adx < ADX_WEAK:
+        return "Sideways Market"
+    bull = pdi >= mdi
+    if adx >= ADX_STRONG:
+        return "Strong Bullish Trend" if bull else "Strong Bearish Trend"
+    return "Weak Bullish Trend" if bull else "Weak Bearish Trend"
+
+
+def regime_color(regime):
+    k = REGIME_COLOR_KEY.get(regime, "muted")
+    return {"up": P["up"], "down": P["down"], "up_soft": "#7fcfae", "down_soft": "#e9989c"}.get(k, P["muted"])
+
+
+def adx_analysis(d: pd.DataFrame, bar_word="day"):
+    x = d.dropna(subset=["ADX", "PDI", "MDI"])
+    if len(x) < 30:
+        return None
+    last = x.iloc[-1]
+    adx, pdi, mdi = float(last["ADX"]), float(last["PDI"]), float(last["MDI"])
+    regime = adx_regime(adx, pdi, mdi)
+    adx5 = float(x["ADX"].iloc[-6])
+    slope = adx - adx5
+    rising = slope > 1.0
+    falling = slope < -1.0
+    # most recent DI crossover in the last 20 bars
+    cross = None
+    diff = (x["PDI"] - x["MDI"]).tail(21)
+    sgn = np.sign(diff.values)
+    for i in range(len(sgn) - 1, 0, -1):
+        if sgn[i] != sgn[i - 1] and sgn[i] != 0:
+            cross = {"bull": sgn[i] > 0, "bars_ago": len(sgn) - 1 - i, "adx": float(x["ADX"].iloc[-(len(sgn) - i)])}
+            break
+    band = ("above 25: a strong trend" if adx >= ADX_STRONG else
+            "between 20 and 25: a weak trend" if adx >= ADX_WEAK else "below 20: no real trend")
+    side = ("buyers (+DI) lead sellers (−DI)" if pdi >= mdi else "sellers (−DI) lead buyers (+DI)")
+    notes = [f"ADX {adx:.1f} is {band}; {side} by {abs(pdi - mdi):.1f} points → <b>{regime}</b>."
+             if regime != "Sideways Market" else
+             f"ADX {adx:.1f} is {band}, so the +DI/−DI direction is ignored → <b>{regime}</b>."]
+    if adx >= 40:
+        notes.append(f"ADX {adx:.0f} is very high: a powerful trend, but trends this stretched can be late-stage.")
+    if regime != "Sideways Market":
+        if rising:
+            notes.append(f"ADX is rising ({adx5:.0f} → {adx:.0f}): the trend is getting stronger.")
+        elif not falling:
+            notes.append(f"ADX is steady ({adx5:.0f} → {adx:.0f}): trend strength isn't changing much.")
+        elif falling:
+            notes.append(f"ADX is falling ({adx5:.0f} → {adx:.0f}): the trend is losing strength. Watch for a pause "
+                         f"or reversal.")
+    else:
+        if rising:
+            notes.append(f"ADX is rising from low levels ({adx5:.0f} → {adx:.0f}): a new trend may be starting.")
+        else:
+            notes.append("No trend: price is moving sideways, so breakouts often fail in this condition.")
+    if cross:
+        side = "+DI crossed above −DI (bullish)" if cross["bull"] else "−DI crossed above +DI (bearish)"
+        when = "on the latest bar" if cross["bars_ago"] == 0 else f"{cross['bars_ago']} {bar_word}(s) ago"
+        strength = "with ADX already above 20, so it carries weight" if cross["adx"] >= ADX_WEAK else \
+                   "but ADX was low, so treat it with caution"
+        notes.append(f"{side} {when}, {strength}.")
+    playbook = {
+        "Strong Bullish Trend": "Trend-following works best: buy pullbacks to support / EMA20, hold winners, "
+                                "use a trailing stop. Avoid shorting.",
+        "Weak Bullish Trend": "Up-bias but not strong yet: smaller positions, wait for ADX to climb above 25 or buy "
+                              "only near support.",
+        "Strong Bearish Trend": "Sellers in control: avoid buying dips, protect existing positions with stops. "
+                                "Wait for ADX to fall and +DI to cross back up.",
+        "Weak Bearish Trend": "Down-bias but weak: avoid new buys until +DI crosses above −DI; tighten stops.",
+        "Sideways Market": "Range conditions: buy near support, sell near resistance, and be careful with "
+                           "breakouts (many fail). Trend signals are less reliable here.",
+    }[regime]
+    return {"adx": adx, "pdi": pdi, "mdi": mdi, "regime": regime, "rising": rising, "falling": falling,
+            "adx5": adx5, "notes": notes, "playbook": playbook, "cross": cross}
+
+
+# ----------------------------------------------------------------------------
 # Extra support/resistance methods (optional overlays)
 # ----------------------------------------------------------------------------
 EXTRA_OPTS = ["Swing highs/lows", "Repeated touches (3+)", "Volume profile", "Fibonacci retracement"]
@@ -833,8 +930,8 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     labels = [ts.strftime(fmt) for ts in x.index]
     flabels = future_labels(d, fc["horizon"], interval) if fc else []
 
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-                        row_heights=[0.54, 0.16, 0.15, 0.15])
+    fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.025,
+                        row_heights=[0.48, 0.13, 0.13, 0.13, 0.13])
     fig.add_trace(go.Candlestick(
         x=labels, open=x["Open"], high=x["High"], low=x["Low"], close=x["Close"], name=name,
         increasing=dict(line=dict(color=P["up"], width=1), fillcolor=P["up"]),
@@ -863,7 +960,7 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
         fig.add_trace(go.Scatter(mode="lines", x=fx, y=[last] + list(fc["centre"]), name="Forecast",
                                  line=dict(color=P["accent"], width=2.2, dash="dash")), 1, 1)
         # keep RSI/MACD x-axes aligned with the extended price axis
-        for row in (2, 3, 4):
+        for row in (2, 3, 4, 5):
             fig.add_trace(go.Scatter(mode="lines", x=flabels, y=[None] * len(flabels), showlegend=False, hoverinfo="skip"), row, 1)
 
     fig.add_hrect(y0=plan["buy_lo"], y1=plan["buy_hi"], fillcolor=P["up"], opacity=0.10, line_width=0, row=1, col=1)
@@ -933,9 +1030,23 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                              showlegend=False), 4, 1)
     fig.add_trace(go.Scatter(x=labels, y=x["MACDsig"], name="Signal", line=dict(color=P["warn"], width=1.2),
                              showlegend=False), 4, 1)
+    # ---- ADX panel
+    fig.add_hrect(y0=0, y1=ADX_WEAK, fillcolor=P["muted"], opacity=0.07, line_width=0, row=5, col=1)
+    fig.add_hline(y=ADX_STRONG, line=dict(color=rgba(P["text"], .35), width=1, dash="dot"), row=5, col=1,
+                  annotation_text="25 strong", annotation_position="right",
+                  annotation_font=dict(color=P["muted"], size=10))
+    fig.add_hline(y=ADX_WEAK, line=dict(color=rgba(P["text"], .25), width=1, dash="dot"), row=5, col=1,
+                  annotation_text="20 trend / no trend", annotation_position="right",
+                  annotation_font=dict(color=P["muted"], size=10))
+    fig.add_trace(go.Scatter(x=labels, y=x["PDI"], name="+DI", line=dict(color=P["up"], width=1.2),
+                             showlegend=False, hovertemplate="+DI %{y:.1f}<extra></extra>"), 5, 1)
+    fig.add_trace(go.Scatter(x=labels, y=x["MDI"], name="−DI", line=dict(color=P["down"], width=1.2),
+                             showlegend=False, hovertemplate="−DI %{y:.1f}<extra></extra>"), 5, 1)
+    fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", line=dict(color=P["text"], width=2),
+                             showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), 5, 1)
 
     fig.update_layout(
-        template="plotly_dark", height=900, margin=dict(l=8, r=96, t=36, b=8),
+        template="plotly_dark", height=1020, margin=dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=P["text"], size=12),
         xaxis_rangeslider_visible=False, hovermode="x unified",
@@ -958,6 +1069,7 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     fig.update_yaxes(title_text="Volume", row=2, col=1, title_font=dict(color=P["muted"], size=11), rangemode="tozero")
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1, title_font=dict(color=P["muted"], size=11))
     fig.update_yaxes(title_text="MACD", row=4, col=1, title_font=dict(color=P["muted"], size=11))
+    fig.update_yaxes(title_text="ADX / DI", row=5, col=1, title_font=dict(color=P["muted"], size=11), rangemode="tozero")
     return fig
 
 
@@ -1146,6 +1258,8 @@ with tab_scr:
                     "Signal": f"{LABEL_DOT[label]} {label}", "_label": label, "Score": sc,
                     "RSI": float(last["RSI"]),
                     "RVOL": float(last["RVOL"]) if pd.notna(last["RVOL"]) else None,
+                    "ADX": float(last["ADX"]) if pd.notna(last["ADX"]) else None,
+                    "Trend (ADX)": adx_regime(last["ADX"], last["PDI"], last["MDI"]),
                     "Support": sup[0][0], "Resistance": res[0][0],
                     "To support %": (price / sup[0][0] - 1) * 100,
                     "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
@@ -1166,7 +1280,8 @@ with tab_scr:
         c4.metric("Near support (<3%)", int((tbl["To support %"] < 3).sum()))
         st.write("")
         flt = st.segmented_control("Filter", ["All", "Buy only", "Sell only", "Near support (<3%)", "R:R ≥ 2",
-                                              "Unusual volume (RVOL ≥ 2)"],
+                                              "Unusual volume (RVOL ≥ 2)", "Strong trends (ADX ≥ 25)",
+                                              "Sideways (ADX < 20)"],
                                    default="All", key="scr_filter") or "All"
         view = tbl
         if flt == "Buy only":
@@ -1179,6 +1294,10 @@ with tab_scr:
             view = tbl[tbl["R:R"] >= 2]
         elif flt.startswith("Unusual"):
             view = tbl[tbl["RVOL"].fillna(0) >= 2].sort_values("RVOL", ascending=False)
+        elif flt.startswith("Strong trends"):
+            view = tbl[tbl["ADX"].fillna(0) >= ADX_STRONG].sort_values("ADX", ascending=False)
+        elif flt.startswith("Sideways"):
+            view = tbl[tbl["ADX"].fillna(0) < ADX_WEAK]
         cc = st.column_config
         st.dataframe(
             view.drop(columns=["_label"]), hide_index=True, width="stretch",
@@ -1189,6 +1308,8 @@ with tab_scr:
                 "Change %": cc.NumberColumn(format="%+.2f%%"),
                 "Score": cc.ProgressColumn(min_value=-100, max_value=100, format="%d", width="small"),
                 "RSI": cc.NumberColumn(format="%.0f", width="small"),
+                "ADX": cc.NumberColumn("ADX", format="%.0f", width="small",
+                                       help="Trend strength: <20 sideways, 20–25 weak, 25+ strong"),
                 "RVOL": cc.NumberColumn("RVOL", format="%.1f×", width="small",
                                         help="Relative volume: latest volume ÷ 20-bar average. 2×+ = spike"),
                 "Support": cc.NumberColumn(format="%.3f"),
@@ -1223,6 +1344,8 @@ with tab_an:
         d, sup, res, sc, label, why = analyse(df)
         plan = trade_plan(d, sup, res, label, unit)
         fc = trend_forecast(d, horizon=horizon, lookback=min(lookback, len(d) - 2))
+        bar_word_a = {"1d": "day", "1wk": "week", "1h": "hour", "15m": "bar"}.get(interval, "bar")
+        ax = adx_analysis(d, bar_word_a)
         last, prev = d.iloc[-1], d.iloc[-2]
         price = float(last["Close"])
         chg = (price / float(prev["Close"]) - 1) * 100
@@ -1236,6 +1359,7 @@ with tab_an:
   <div><div class="name">Signal</div>{pill(label, LABEL_COLOR[label])}</div>
   <div><div class="name">Score</div><div style="font-size:20px;font-weight:600">{sc:+d}<span class="muted"> / 100</span></div></div>
   <div><div class="name">Trend forecast</div>{pill(f"{fc['arrow']} {fc['direction']} · {fc['strength']}", dir_col)}</div>
+  <div><div class="name">Trend strength (ADX)</div>{pill(f"{ax['regime']} · {ax['adx']:.0f}", regime_color(ax['regime'])) if ax else pill("n/a", P['muted'])}</div>
   <div><div class="name">RSI</div><div style="font-size:20px;font-weight:600">{last['RSI']:.0f}</div></div>
   <div style="margin-left:auto" class="muted">Last data {d.index[-1].strftime('%d %b %Y %H:%M')}<br>{tf_name}</div>
 </div></div>""", unsafe_allow_html=True)
@@ -1324,6 +1448,59 @@ with tab_an:
 <div class="note">RVOL = today's volume ÷ average of the previous 20 {bar_word}s. 1× = normal, 2×+ = spike, 3×+ = unusual.
 Price moves on high volume are more trustworthy; moves on low volume often fade. Up/down volume above 1 = more shares
 traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
+
+        # ---- ADX card
+        if ax:
+            rc = regime_color(ax["regime"])
+            gauge_w = min(ax["adx"], 60) / 60 * 100
+            di_total = ax["pdi"] + ax["mdi"] or 1
+            pdi_w = ax["pdi"] / di_total * 100
+            trend_arrow = "↗ rising" if ax["rising"] else ("↘ falling" if ax["falling"] else "→ flat")
+            notes_html = "".join(f"<div class='reason'><span>•</span><span>{n}</span></div>" for n in ax["notes"])
+            regimes = ["Strong Bearish Trend", "Weak Bearish Trend", "Sideways Market", "Weak Bullish Trend",
+                       "Strong Bullish Trend"]
+            scale = "".join(
+                f"<div style='flex:1;text-align:center;padding:7px 4px;border-radius:8px;font-size:12px;"
+                f"background:{rgba(regime_color(r_), .22 if r_ == ax['regime'] else .06)};"
+                f"color:{regime_color(r_) if r_ == ax['regime'] else P['muted']};"
+                f"font-weight:{700 if r_ == ax['regime'] else 500};"
+                f"border:1px solid {rgba(regime_color(r_), .6) if r_ == ax['regime'] else P['border']}'>{r_}</div>"
+                for r_ in regimes)
+            st.markdown(f"""
+<div class="card" style="border-left:3px solid {rc}">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+  <h3 style="margin:0">📐 Trend strength (ADX 14)</h3>{pill(ax['regime'], rc)}</div>
+<div style="display:flex;gap:6px;margin:14px 0 16px;flex-wrap:wrap">{scale}</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px">
+ <div>
+  <div class="muted">ADX: how strong (not which way)</div>
+  <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:28px;font-weight:700">{ax['adx']:.1f}</span>
+   <span class="muted">{trend_arrow} (5 {bar_word_a}s ago {ax['adx5']:.1f})</span></div>
+  <div style="position:relative;height:10px;border-radius:6px;background:{P['card2']};margin:8px 0 4px;overflow:hidden">
+   <div style="position:absolute;left:0;top:0;bottom:0;width:{gauge_w:.0f}%;background:{rc};opacity:.85"></div>
+   <div style="position:absolute;left:{20/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div>
+   <div style="position:absolute;left:{25/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div></div>
+  <div class="muted" style="font-size:11.5px;display:flex;justify-content:space-between">
+   <span>0 · no trend</span><span>20</span><span>25 · strong</span><span>40+ · very strong</span></div>
+ </div>
+ <div>
+  <div class="muted">+DI vs −DI: which side is winning (direction)</div>
+  <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:600">
+   <span style="color:{P['up']}">+DI {ax['pdi']:.1f} buyers</span><span style="color:{P['down']}">sellers −DI {ax['mdi']:.1f}</span></div>
+  <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;margin-top:6px">
+   <div style="width:{pdi_w:.0f}%;background:{P['up']};opacity:.8"></div>
+   <div style="flex:1;background:{P['down']};opacity:.8"></div></div>
+  <div class="muted" style="font-size:11.5px;margin-top:4px">{'Buyers' if ax['pdi'] >= ax['mdi'] else 'Sellers'} have the upper hand
+   (gap {abs(ax['pdi'] - ax['mdi']):.1f})</div>
+ </div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:14px">
+ <div><b>What the indicators say</b>{notes_html}</div>
+ <div><b>How to trade this condition</b><div class="reason"><span>🧭</span><span>{ax['playbook']}</span></div></div>
+</div>
+<div class="note">ADX below 20 = sideways (direction ignored) · 20–25 = weak trend · 25+ = strong trend. The direction comes from
++DI (buying pressure) vs −DI (selling pressure). ADX rises in strong up-trends <i>and</i> strong down-trends, so it never
+tells direction on its own. Chart: bottom panel, white = ADX, green = +DI, red = −DI.</div></div>""", unsafe_allow_html=True)
         st.write("")
 
         col1, col2, col3 = st.columns(3, gap="medium")
