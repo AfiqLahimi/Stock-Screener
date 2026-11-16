@@ -273,6 +273,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     tr = pd.concat([d["High"] - d["Low"], (d["High"] - c.shift()).abs(), (d["Low"] - c.shift()).abs()], axis=1).max(axis=1)
     d["ATR"] = tr.ewm(alpha=1 / 14, adjust=False).mean()
     d["VolAvg"] = d["Volume"].rolling(20).mean()
+    d["VolAvg20"] = d["Volume"].shift(1).rolling(20).mean()          # average of the previous 20 bars
+    d["RVOL"] = (d["Volume"] / d["VolAvg20"]).replace([np.inf, -np.inf], np.nan)
+    d["OBV"] = (np.sign(c.diff()).fillna(0) * d["Volume"]).cumsum()
+    d["HH20"] = d["High"].shift(1).rolling(20).max()                 # prior 20-bar high / low (breakout levels)
+    d["LL20"] = d["Low"].shift(1).rolling(20).min()
     return d
 
 
@@ -477,6 +482,8 @@ def trend_forecast(d: pd.DataFrame, horizon: int = 10, lookback: int = 60):
         direction, arrow = "Downtrend", "↘"
     strength = "Strong" if r2 >= 0.7 else ("Moderate" if r2 >= 0.45 else "Weak")
     if direction == "Sideways":
+        strength = "Flat"  # a clean but tiny slope is still no usable trend
+    if direction == "Sideways":
         momentum = "No clear direction recently"
     elif np.sign(slope_short) != np.sign(slope):
         momentum = "Short-term move is going against the trend: possible turn"
@@ -538,6 +545,141 @@ def rgba(hex_color, a):
 def pill(text, color):
     return (f"<span class='pill' style='background:{rgba(color, .16)};color:{color};"
             f"border:1px solid {rgba(color, .35)}'>{text}</span>")
+
+
+# ----------------------------------------------------------------------------
+# Volume analysis
+# ----------------------------------------------------------------------------
+SPIKE_RVOL, UNUSUAL_RVOL = 2.0, 3.0
+
+
+def volume_analysis(d: pd.DataFrame, bar_word: str = "day"):
+    """Is the price action backed by meaningful trading volume?"""
+    x = d.dropna(subset=["VolAvg20"])
+    if len(x) < 25 or float(x["Volume"].tail(20).sum()) == 0:
+        return None
+    last, prev = x.iloc[-1], x.iloc[-2]
+    rvol = float(last["RVOL"]) if pd.notna(last["RVOL"]) else 0.0
+    atr = float(last["ATR"])
+    chg = (float(last["Close"]) / float(prev["Close"]) - 1) * 100
+    rng = float(last["High"] - last["Low"])
+    body = abs(float(last["Close"] - last["Open"]))
+
+    # participation: last 5 bars vs 20-bar average
+    part = float(x["Volume"].tail(5).mean() / last["VolAvg20"]) if last["VolAvg20"] else np.nan
+
+    # up-volume vs down-volume (accumulation / distribution) over 20 bars
+    t20 = x.tail(20)
+    up_v = float(t20.loc[t20["Close"] > t20["Open"], "Volume"].sum())
+    dn_v = float(t20.loc[t20["Close"] < t20["Open"], "Volume"].sum())
+    ud = up_v / dn_v if dn_v > 0 else (np.inf if up_v > 0 else 1.0)
+
+    # OBV vs price over 20 bars
+    p_chg = float(t20["Close"].iloc[-1] - t20["Close"].iloc[0])
+    o_chg = float(t20["OBV"].iloc[-1] - t20["OBV"].iloc[0])
+    obv_div = (p_chg > 0 > o_chg) or (p_chg < 0 < o_chg)
+
+    # spikes in the last 60 bars
+    t60 = x.tail(60)
+    spikes = []
+    for ts, r in t60[t60["RVOL"] >= SPIKE_RVOL].iterrows():
+        i = x.index.get_loc(ts)
+        pc = (float(r["Close"]) / float(x["Close"].iloc[i - 1]) - 1) * 100 if i > 0 else 0.0
+        spikes.append({"date": ts, "rvol": float(r["RVOL"]), "chg": pc})
+
+    # most recent 20-bar breakout / breakdown within the last 10 bars, and its volume
+    brk = None
+    t10 = x.tail(10)
+    for ts, r in t10.iloc[::-1].iterrows():
+        if pd.notna(r["HH20"]) and r["Close"] > r["HH20"]:
+            brk = {"type": "Breakout", "date": ts, "level": float(r["HH20"]),
+                   "rvol": float(r["RVOL"]) if pd.notna(r["RVOL"]) else 0.0}
+            break
+        if pd.notna(r["LL20"]) and r["Close"] < r["LL20"]:
+            brk = {"type": "Breakdown", "date": ts, "level": float(r["LL20"]),
+                   "rvol": float(r["RVOL"]) if pd.notna(r["RVOL"]) else 0.0}
+            break
+    if brk:
+        brk["bars_ago"] = len(x) - 1 - x.index.get_loc(brk["date"])
+        brk["grade"] = ("Confirmed" if brk["rvol"] >= 1.5 else "Moderate" if brk["rvol"] >= 1.0 else "Weak")
+
+    # unusual activity flags (latest bar)
+    flags = []
+    if rvol >= UNUSUAL_RVOL:
+        flags.append(("🚨", f"Unusual activity: volume is {rvol:.1f}× normal", P["warn"]))
+    elif rvol >= SPIKE_RVOL:
+        flags.append(("⚡", f"Volume spike: {rvol:.1f}× normal", P["warn"]))
+    if rvol >= SPIKE_RVOL and rng > 0 and body < 0.3 * rng and abs(chg) < 1:
+        flags.append(("🧲", "Heavy volume but price barely moved (churning): big players may be quietly "
+                            "buying or selling. Watch which way it breaks.", P["accent"]))
+    if rng > 1.5 * atr and rvol < 0.8:
+        flags.append(("🫥", f"Big price move on light volume ({rvol:.1f}×): less reliable, may reverse.", P["muted"]))
+    if obv_div:
+        flags.append(("↔️", "OBV divergence: volume flow disagrees with the price trend (early warning).",
+                      P["warn"]))
+    recent_unusual = [s_ for s_ in spikes if s_["rvol"] >= UNUSUAL_RVOL and (x.index[-1] - s_["date"]).days <= 14]
+    if recent_unusual and rvol < UNUSUAL_RVOL:
+        s0 = recent_unusual[-1]
+        flags.append(("🔎", f"Unusual volume {s0['rvol']:.1f}× on {s0['date'].strftime('%d %b')} "
+                            f"({s0['chg']:+.1f}%): something happened; check the news.", P["accent"]))
+
+    # verdict: is the move supported?
+    pts, why = 0, []
+    move_up = float(x["Close"].iloc[-1]) >= float(x["Close"].iloc[-6])
+    direction = "up" if move_up else "down"
+    if abs(chg) >= 0.5:
+        if rvol >= 1.2:
+            pts += 2
+            why.append(f"Latest {bar_word} moved {chg:+.1f}% on {rvol:.1f}× normal volume: a real move.")
+        elif rvol < 0.8:
+            pts -= 2
+            why.append(f"Latest {bar_word} moved {chg:+.1f}% on only {rvol:.1f}× normal volume: weak conviction.")
+        else:
+            why.append(f"Latest {bar_word} moved {chg:+.1f}% on about normal volume ({rvol:.1f}×).")
+    else:
+        why.append(f"Latest {bar_word} was quiet ({chg:+.1f}%, volume {rvol:.1f}× normal).")
+    if (move_up and ud >= 1.3) or (not move_up and ud <= 0.77):
+        pts += 2
+        why.append(f"Volume on {'up' if move_up else 'down'} candles dominates (up/down volume {ud:.2f}): "
+                   f"{'buyers are accumulating' if move_up else 'sellers are distributing'}, which supports the "
+                   f"{direction}-move.")
+    elif (move_up and ud <= 0.9) or (not move_up and ud >= 1.1):
+        pts -= 2
+        why.append(f"Price is going {direction} but the volume is mostly on the opposite side (up/down volume "
+                   f"{ud:.2f}): the move isn't backed by real money.")
+    if pd.notna(part):
+        if part >= 1.2:
+            pts += 1
+            why.append(f"Participation is rising: last 5 {bar_word}s average {part:.1f}× the 20-{bar_word} norm.")
+        elif part <= 0.7:
+            pts -= 1
+            why.append(f"Participation is fading: last 5 {bar_word}s average only {part:.1f}× the norm.")
+    if brk:
+        if brk["grade"] == "Confirmed":
+            pts += 2
+        elif brk["grade"] == "Weak":
+            pts -= 2
+    if obv_div:
+        pts -= 1
+
+    if pts >= 3:
+        verdict, vcol = f"✅ Volume supports the {direction}-move", P["up"] if move_up else P["down"]
+    elif pts <= -2:
+        verdict, vcol = f"⚠️ The {direction}-move lacks volume support", P["warn"]
+    else:
+        verdict, vcol = "➖ Mixed: volume neither confirms nor rejects the move", P["muted"]
+
+    return {"rvol": rvol, "vol": float(last["Volume"]), "avg": float(last["VolAvg20"]), "chg": chg,
+            "part": part, "ud": ud, "obv_div": obv_div, "spikes": spikes, "brk": brk, "flags": flags,
+            "verdict": verdict, "vcol": vcol, "why": why, "score": pts}
+
+
+def fmt_vol(v):
+    v = float(v)
+    for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(v) >= div:
+            return f"{v / div:.2f}{suf}"
+    return f"{v:,.0f}"
 
 
 # ----------------------------------------------------------------------------
@@ -691,8 +833,8 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     labels = [ts.strftime(fmt) for ts in x.index]
     flabels = future_labels(d, fc["horizon"], interval) if fc else []
 
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04,
-                        row_heights=[0.64, 0.18, 0.18])
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                        row_heights=[0.54, 0.16, 0.15, 0.15])
     fig.add_trace(go.Candlestick(
         x=labels, open=x["Open"], high=x["High"], low=x["Low"], close=x["Close"], name=name,
         increasing=dict(line=dict(color=P["up"], width=1), fillcolor=P["up"]),
@@ -721,7 +863,7 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
         fig.add_trace(go.Scatter(mode="lines", x=fx, y=[last] + list(fc["centre"]), name="Forecast",
                                  line=dict(color=P["accent"], width=2.2, dash="dash")), 1, 1)
         # keep RSI/MACD x-axes aligned with the extended price axis
-        for row in (2, 3):
+        for row in (2, 3, 4):
             fig.add_trace(go.Scatter(mode="lines", x=flabels, y=[None] * len(flabels), showlegend=False, hoverinfo="skip"), row, 1)
 
     fig.add_hrect(y0=plan["buy_lo"], y1=plan["buy_hi"], fillcolor=P["up"], opacity=0.10, line_width=0, row=1, col=1)
@@ -738,20 +880,62 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                   annotation_text=f"Stop {plan['stop']:.3f}", annotation_position="bottom right",
                   annotation_font=dict(color=P["warn"], size=11))
 
+    # ---- volume panel
+    rv = x["RVOL"].fillna(0).values
+    up_bar = (x["Close"] >= x["Open"]).values
+    vcolors = [P["warn"] if r >= SPIKE_RVOL else (rgba(P["up"], .55) if u else rgba(P["down"], .55))
+               for r, u in zip(rv, up_bar)]
+    fig.add_trace(go.Bar(x=labels, y=x["Volume"], name="Volume", marker_color=vcolors, showlegend=False,
+                         customdata=np.stack([rv], axis=-1),
+                         hovertemplate="Vol %{y:,.0f} · RVOL %{customdata[0]:.1f}×<extra></extra>"), 2, 1)
+    fig.add_trace(go.Scatter(x=labels, y=x["VolAvg20"], name="Avg volume (20)", mode="lines",
+                             line=dict(color=P["accent"], width=1.4)), 2, 1)
+    sp = [i for i, r in enumerate(rv) if r >= SPIKE_RVOL]
+    if sp:
+        fig.add_trace(go.Scatter(mode="text", x=[labels[i] for i in sp], y=[float(x["Volume"].iloc[i]) for i in sp],
+                                 text=["🚨" if rv[i] >= UNUSUAL_RVOL else "⚡" for i in sp], textposition="top center",
+                                 showlegend=False, hoverinfo="skip", textfont=dict(size=11)), 2, 1)
+    # breakout / breakdown markers on price, coloured by volume confirmation
+    bo_x, bo_y, bo_t, bo_c, bd_x, bd_y, bd_t, bd_c = [], [], [], [], [], [], [], []
+    for i in range(1, len(x)):
+        r = x.iloc[i]
+        if pd.isna(r["HH20"]) or pd.isna(r["LL20"]):
+            continue
+        rvi = float(r["RVOL"]) if pd.notna(r["RVOL"]) else 0
+        prev_c = float(x["Close"].iloc[i - 1])
+        if r["Close"] > r["HH20"] and prev_c <= float(x["HH20"].iloc[i - 1] or np.inf):
+            bo_x.append(labels[i]); bo_y.append(float(r["Low"]) * 0.985)
+            bo_t.append(f"Breakout · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
+            bo_c.append(P["up"] if rvi >= 1.5 else P["muted"])
+        elif r["Close"] < r["LL20"] and prev_c >= float(x["LL20"].iloc[i - 1] or -np.inf):
+            bd_x.append(labels[i]); bd_y.append(float(r["High"]) * 1.015)
+            bd_t.append(f"Breakdown · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
+            bd_c.append(P["down"] if rvi >= 1.5 else P["muted"])
+    if bo_x:
+        fig.add_trace(go.Scatter(mode="markers", x=bo_x, y=bo_y, name="20-bar breakout", text=bo_t,
+                                 hovertemplate="%{text}<extra></extra>",
+                                 marker=dict(symbol="star-triangle-up", size=11, color=bo_c,
+                                             line=dict(width=1, color=P["bg"]))), 1, 1)
+    if bd_x:
+        fig.add_trace(go.Scatter(mode="markers", x=bd_x, y=bd_y, name="20-bar breakdown", text=bd_t,
+                                 hovertemplate="%{text}<extra></extra>",
+                                 marker=dict(symbol="star-triangle-down", size=11, color=bd_c,
+                                             line=dict(width=1, color=P["bg"]))), 1, 1)
+
     fig.add_trace(go.Scatter(x=labels, y=x["RSI"], name="RSI", line=dict(color=P["ema200"], width=1.4),
-                             showlegend=False), 2, 1)
-    fig.add_hrect(y0=30, y1=70, fillcolor=P["muted"], opacity=0.06, line_width=0, row=2, col=1)
-    fig.add_hline(y=70, line=dict(color=rgba(P["down"], .6), width=1, dash="dot"), row=2, col=1)
-    fig.add_hline(y=30, line=dict(color=rgba(P["up"], .6), width=1, dash="dot"), row=2, col=1)
+                             showlegend=False), 3, 1)
+    fig.add_hrect(y0=30, y1=70, fillcolor=P["muted"], opacity=0.06, line_width=0, row=3, col=1)
+    fig.add_hline(y=70, line=dict(color=rgba(P["down"], .6), width=1, dash="dot"), row=3, col=1)
+    fig.add_hline(y=30, line=dict(color=rgba(P["up"], .6), width=1, dash="dot"), row=3, col=1)
     colors = np.where(x["MACDhist"] >= 0, rgba(P["up"], .75), rgba(P["down"], .75))
-    fig.add_trace(go.Bar(x=labels, y=x["MACDhist"], name="MACD hist", marker_color=colors, showlegend=False), 3, 1)
+    fig.add_trace(go.Bar(x=labels, y=x["MACDhist"], name="MACD hist", marker_color=colors, showlegend=False), 4, 1)
     fig.add_trace(go.Scatter(x=labels, y=x["MACD"], name="MACD", line=dict(color=P["ema50"], width=1.2),
-                             showlegend=False), 3, 1)
+                             showlegend=False), 4, 1)
     fig.add_trace(go.Scatter(x=labels, y=x["MACDsig"], name="Signal", line=dict(color=P["warn"], width=1.2),
-                             showlegend=False), 3, 1)
+                             showlegend=False), 4, 1)
 
     fig.update_layout(
-        template="plotly_dark", height=780, margin=dict(l=8, r=96, t=36, b=8),
+        template="plotly_dark", height=900, margin=dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=P["text"], size=12),
         xaxis_rangeslider_visible=False, hovermode="x unified",
@@ -771,8 +955,9 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     lo_r, hi_r = min(lo_v), max(hi_v)
     pad = (hi_r - lo_r) * 0.05
     fig.update_yaxes(range=[lo_r - pad, hi_r + pad], row=1, col=1)
-    fig.update_yaxes(title_text="RSI", range=[0, 100], row=2, col=1, title_font=dict(color=P["muted"], size=11))
-    fig.update_yaxes(title_text="MACD", row=3, col=1, title_font=dict(color=P["muted"], size=11))
+    fig.update_yaxes(title_text="Volume", row=2, col=1, title_font=dict(color=P["muted"], size=11), rangemode="tozero")
+    fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1, title_font=dict(color=P["muted"], size=11))
+    fig.update_yaxes(title_text="MACD", row=4, col=1, title_font=dict(color=P["muted"], size=11))
     return fig
 
 
@@ -960,6 +1145,7 @@ with tab_scr:
                     "Change %": (price / float(prev["Close"]) - 1) * 100,
                     "Signal": f"{LABEL_DOT[label]} {label}", "_label": label, "Score": sc,
                     "RSI": float(last["RSI"]),
+                    "RVOL": float(last["RVOL"]) if pd.notna(last["RVOL"]) else None,
                     "Support": sup[0][0], "Resistance": res[0][0],
                     "To support %": (price / sup[0][0] - 1) * 100,
                     "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
@@ -979,7 +1165,8 @@ with tab_scr:
         c3.metric("Sell signals", int(tbl["_label"].isin(["SELL", "STRONG SELL"]).sum()))
         c4.metric("Near support (<3%)", int((tbl["To support %"] < 3).sum()))
         st.write("")
-        flt = st.segmented_control("Filter", ["All", "Buy only", "Sell only", "Near support (<3%)", "R:R ≥ 2"],
+        flt = st.segmented_control("Filter", ["All", "Buy only", "Sell only", "Near support (<3%)", "R:R ≥ 2",
+                                              "Unusual volume (RVOL ≥ 2)"],
                                    default="All", key="scr_filter") or "All"
         view = tbl
         if flt == "Buy only":
@@ -990,6 +1177,8 @@ with tab_scr:
             view = tbl[tbl["To support %"] < 3]
         elif flt.startswith("R:R"):
             view = tbl[tbl["R:R"] >= 2]
+        elif flt.startswith("Unusual"):
+            view = tbl[tbl["RVOL"].fillna(0) >= 2].sort_values("RVOL", ascending=False)
         cc = st.column_config
         st.dataframe(
             view.drop(columns=["_label"]), hide_index=True, width="stretch",
@@ -1000,6 +1189,8 @@ with tab_scr:
                 "Change %": cc.NumberColumn(format="%+.2f%%"),
                 "Score": cc.ProgressColumn(min_value=-100, max_value=100, format="%d", width="small"),
                 "RSI": cc.NumberColumn(format="%.0f", width="small"),
+                "RVOL": cc.NumberColumn("RVOL", format="%.1f×", width="small",
+                                        help="Relative volume: latest volume ÷ 20-bar average. 2×+ = spike"),
                 "Support": cc.NumberColumn(format="%.3f"),
                 "Resistance": cc.NumberColumn(format="%.3f"),
                 "To support %": cc.NumberColumn(format="%.1f%%"),
@@ -1071,7 +1262,68 @@ with tab_an:
                         unsafe_allow_html=True)
         st.markdown(f"<div class='note'>Green band = buy zone · red band = sell zone · dashed orange = stop loss · "
                     f"S/R lines show how many times price touched them · blue dashed = forecast with 68% (darker) "
-                    f"and 95% (lighter) ranges</div>", unsafe_allow_html=True)
+                    f"and 95% (lighter) ranges · <b>Volume panel</b>: blue line = 20-bar average, "
+                    f"<span style='color:{P['warn']}'>orange bars ⚡</span> = spike (2×+), 🚨 = unusual (3×+) · "
+                    f"★ on price = 20-bar breakout/breakdown (coloured = confirmed by volume, grey = weak volume)"
+                    f"</div>", unsafe_allow_html=True)
+
+        # ---- Volume analysis card
+        bar_word = {"1d": "day", "1wk": "week", "1h": "hour", "15m": "bar"}.get(interval, "bar")
+        va = volume_analysis(d, bar_word)
+        if va is None:
+            st.info("Not enough volume data for a volume analysis.")
+        else:
+            rv_col = P["warn"] if va["rvol"] >= SPIKE_RVOL else (P["up"] if va["rvol"] >= 1.2 else
+                                                                 (P["muted"] if va["rvol"] >= 0.8 else P["down"]))
+            ud_txt = "∞" if np.isinf(va["ud"]) else f"{va['ud']:.2f}"
+            ud_col = P["up"] if va["ud"] >= 1.3 else (P["down"] if va["ud"] <= 0.77 else P["muted"])
+            ud_lab = "accumulation" if va["ud"] >= 1.3 else ("distribution" if va["ud"] <= 0.77 else "balanced")
+            part_txt = "–" if pd.isna(va["part"]) else f"{va['part']:.2f}×"
+            if va["brk"]:
+                b = va["brk"]
+                gcol = {"Confirmed": P["up"] if b["type"] == "Breakout" else P["down"], "Moderate": P["warn"],
+                        "Weak": P["muted"]}[b["grade"]]
+                when = "latest bar" if b["bars_ago"] == 0 else f"{b['bars_ago']} bar(s) ago"
+                brk_html = (f"{pill(b['type'] + ' · ' + b['grade'], gcol)}<div class='muted' style='margin-top:6px'>"
+                            f"{b['type']} of the 20-bar {'high' if b['type'] == 'Breakout' else 'low'} "
+                            f"{b['level']:.3f} ({when}) on <b>{b['rvol']:.1f}×</b> normal volume. "
+                            + ("Strong volume = real buyers behind it." if b['grade'] == 'Confirmed' and b['type'] == 'Breakout'
+                               else "Strong volume = real selling behind it." if b['grade'] == 'Confirmed'
+                               else "Volume is so-so: wait for follow-through." if b['grade'] == 'Moderate'
+                               else "Low volume: higher risk of a fakeout.") + "</div>")
+            else:
+                brk_html = "<div class='muted'>No 20-bar breakout or breakdown in the last 10 bars.</div>"
+            flags_html = "".join(f"<div class='reason'><span>{ic}</span><span style='color:{c}'>{t}</span></div>"
+                                 for ic, t, c in va["flags"]) or "<div class='muted'>Nothing unusual right now.</div>"
+            why_html = "".join(f"<div class='reason'><span>•</span><span>{w}</span></div>" for w in va["why"])
+            spk = va["spikes"][-6:][::-1]
+            spk_html = "".join(
+                f"<div class='reason'><span style='min-width:70px'>{z['date'].strftime('%d %b')}</span>"
+                f"<b style='color:{P['warn']};min-width:52px'>{z['rvol']:.1f}×</b>"
+                f"<span style='color:{P['up'] if z['chg'] >= 0 else P['down']}'>{z['chg']:+.1f}%</span>"
+                f"<span class='muted'>{'🚨 unusual' if z['rvol'] >= UNUSUAL_RVOL else '⚡ spike'}</span></div>"
+                for z in spk) or "<div class='muted'>No spikes (2×+) in the last 60 bars.</div>"
+            st.markdown(f"""
+<div class="card" style="border-left:3px solid {va['vcol']}">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+  <h3 style="margin:0">📊 Volume analysis</h3>{pill(va['verdict'], va['vcol'])}</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0">
+  <div><div class="muted">Volume (latest)</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['vol'])}</div></div>
+  <div><div class="muted">20-{bar_word} average</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['avg'])}</div></div>
+  <div><div class="muted">Relative volume (RVOL)</div><div style="font-size:20px;font-weight:600;color:{rv_col}">{va['rvol']:.2f}×</div></div>
+  <div><div class="muted">Last 5 vs average</div><div style="font-size:20px;font-weight:600">{part_txt}</div></div>
+  <div><div class="muted">Up / down volume (20)</div><div style="font-size:20px;font-weight:600;color:{ud_col}">{ud_txt}</div>
+       <div class="muted" style="font-size:12px">{ud_lab}</div></div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+  <div><b>Is the move backed by volume?</b>{why_html}</div>
+  <div><b>Breakout confirmation</b><div style="margin-top:8px">{brk_html}</div>
+       <div style="margin-top:14px"><b>Unusual activity</b></div>{flags_html}</div>
+  <div><b>Recent volume spikes (last 60 bars)</b>{spk_html}</div>
+</div>
+<div class="note">RVOL = today's volume ÷ average of the previous 20 {bar_word}s. 1× = normal, 2×+ = spike, 3×+ = unusual.
+Price moves on high volume are more trustworthy; moves on low volume often fade. Up/down volume above 1 = more shares
+traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
         st.write("")
 
         col1, col2, col3 = st.columns(3, gap="medium")
