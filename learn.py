@@ -506,6 +506,13 @@ def render():
 - **Why this signal**: every reason behind the score, so you learn what the indicators are saying.
 - **Candlestick patterns**: recent patterns spotted automatically. Look them up in this Learn tab.
 
+**🎯 Picks tab: let the app shortlist for you**
+- **Short term**: setups to trade over 1 to 4 weeks. A stock only appears under *Good to buy now* if the signal is a
+  buy, risk:reward is at least 1.5, and price is near support or breaking out. Each card shows the buy zone, stop
+  and target.
+- **Long term**: stocks to hold 6 months+. Scored on the 200-day trend, 6 to 12 month momentum, volatility,
+  distance from the 52-week high and, for Bursa, P/E and dividend yield.
+
 **3. TradingView tab**: a full interactive chart where you can draw your own lines and add more indicators.
 
 **4. Dividends tab**: which stocks pay dividends, how much (yield), how often, and the **next ex-date**.

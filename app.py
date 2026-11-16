@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 
 import extras
 import learn
+import picks
 
 st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈", layout="wide")
 
@@ -932,8 +933,9 @@ elif market == "US":
 else:
     universe = tuple(dict.fromkeys(t for t in (normalise(s) for s in custom.split(",")) if t))
 
-tab_scr, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
-    ["🔎  Screener", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO", "📺  TradingView", "🎓  Learn"])
+tab_scr, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
+    ["🔎  Screener", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
+     "📺  TradingView", "🎓  Learn"])
 prices = {}
 
 # ---------------- Screener ----------------
@@ -1156,6 +1158,14 @@ market moves can break any trend, so treat it as a guide, not a prediction. R² 
                              width="stretch",
                              column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
                                             "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
+
+# ---------------- Picks ----------------
+with tab_pk:
+    fundamentals = None
+    if not bursa_all.empty:
+        fundamentals = bursa_all.set_index("ticker")[["pe", "div_yield"]]
+    picks.render(universe, display_name, P, pill, get_many, analyse, trade_plan, add_indicators,
+                 learn.detect_patterns, fundamentals)
 
 # ---------------- Heatmap ----------------
 with tab_hm:
