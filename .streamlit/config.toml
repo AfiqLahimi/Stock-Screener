@@ -1,0 +1,24 @@
+[theme]
+base = "dark"
+primaryColor = "#7b93f5"
+backgroundColor = "#10151f"
+secondaryBackgroundColor = "#171d29"
+textColor = "#dfe3ea"
+borderColor = "#262f40"
+dataframeBorderColor = "#232b3b"
+dataframeHeaderBackgroundColor = "#1c2331"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+baseRadius = "0.6rem"
+showWidgetBorder = true
+greenColor = "#3fb68b"
+redColor = "#e0646a"
+
+[theme.sidebar]
+backgroundColor = "#171d29"
+secondaryBackgroundColor = "#1c2331"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
