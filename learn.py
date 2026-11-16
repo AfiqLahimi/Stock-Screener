@@ -2,6 +2,8 @@
 plus a simple candlestick pattern detector used by the Analysis tab."""
 import math
 
+import numpy as np
+
 import pandas as pd
 import streamlit as st
 
@@ -280,91 +282,116 @@ GLOSSARY = [
 # Pattern detection (for the Analysis tab)
 # ----------------------------------------------------------------------------
 
+def detect_at(o, h, l, c, i):
+    """Pattern ending at candle i, using only candles <= i (no look-ahead).
+    Returns (name, kind, n_candles, rule_text) or None."""
+    if i < 10:
+        return None
+
+    def body(k): return abs(c[k] - o[k])
+    def rng(k): return max(h[k] - l[k], 1e-9)
+    def upper(k): return h[k] - max(o[k], c[k])
+    def lower(k): return min(o[k], c[k]) - l[k]
+    def bull(k): return c[k] > o[k]
+    def bear(k): return c[k] < o[k]
+
+    prior_down = c[i - 1] < c[i - 6]
+    prior_up = c[i - 1] > c[i - 6]
+    avg_rng = float(np.mean(h[i - 10:i] - l[i - 10:i]))
+
+    # --- three-candle ---
+    a, b = i - 2, i - 1
+    if bear(a) and body(a) >= 0.5 * rng(a) and body(b) <= 0.35 * body(a) and bull(i) \
+            and c[i] > (o[a] + c[a]) / 2 and prior_down:
+        return ("Morning Star", "bull", 3, "big red candle, small 'star', then a green candle closing above the "
+                "middle of the first, after a decline")
+    if bull(a) and body(a) >= 0.5 * rng(a) and body(b) <= 0.35 * body(a) and bear(i) \
+            and c[i] < (o[a] + c[a]) / 2 and prior_up:
+        return ("Evening Star", "bear", 3, "big green candle, small 'star', then a red candle closing below the "
+                "middle of the first, after a rise")
+    if all(bull(k) and body(k) >= 0.5 * rng(k) for k in (a, b, i)) and c[a] < c[b] < c[i]:
+        return ("Three White Soldiers", "bull", 3, "three strong green candles, each closing higher")
+    if all(bear(k) and body(k) >= 0.5 * rng(k) for k in (a, b, i)) and c[a] > c[b] > c[i]:
+        return ("Three Black Crows", "bear", 3, "three strong red candles, each closing lower")
+
+    # --- two-candle ---
+    p = i - 1
+    strong = body(i) >= 0.5 * rng(i)
+    if bear(p) and bull(i) and strong and o[i] <= c[p] and c[i] >= o[p] and body(i) > body(p):
+        return ("Bullish Engulfing", "bull", 2, "green body completely covers the previous red body")
+    if bull(p) and bear(i) and strong and o[i] >= c[p] and c[i] <= o[p] and body(i) > body(p):
+        return ("Bearish Engulfing", "bear", 2, "red body completely covers the previous green body")
+    big_prev = body(p) >= 0.6 * rng(p) and rng(p) >= avg_rng
+    inside = max(o[i], c[i]) < max(o[p], c[p]) and min(o[i], c[i]) > min(o[p], c[p]) and body(i) <= 0.5 * body(p)
+    if big_prev and inside and bear(p) and bull(i) and prior_down:
+        return ("Bullish Harami", "bull", 2, "small green body inside a big red body, after a decline")
+    if big_prev and inside and bull(p) and bear(i) and prior_up:
+        return ("Bearish Harami", "bear", 2, "small red body inside a big green body, after a rise")
+    if bear(p) and bull(i) and abs(l[p] - l[i]) <= 0.05 * avg_rng and prior_down and body(p) >= 0.3 * rng(p):
+        return ("Tweezer Bottom", "bull", 2, "two candles with matching lows after a decline")
+    if bull(p) and bear(i) and abs(h[p] - h[i]) <= 0.05 * avg_rng and prior_up and body(p) >= 0.3 * rng(p):
+        return ("Tweezer Top", "bear", 2, "two candles with matching highs after a rise")
+    if bear(p) and bull(i) and o[i] < c[p] and c[i] > (o[p] + c[p]) / 2 and c[i] < o[p] and prior_down:
+        return ("Piercing Line", "bull", 2, "opens below the red candle's close, closes above its midpoint")
+    if bull(p) and bear(i) and o[i] > c[p] and c[i] < (o[p] + c[p]) / 2 and c[i] > o[p] and prior_up:
+        return ("Dark Cloud Cover", "bear", 2, "opens above the green candle's close, closes below its midpoint")
+
+    # --- single candle ---
+    small = max(body(i), 0.1 * rng(i))
+    if rng(i) < 0.3 * avg_rng:
+        return None  # too tiny to mean anything
+    if body(i) <= 0.1 * rng(i):
+        if lower(i) >= 0.6 * rng(i):
+            return ("Dragonfly Doji", "bull" if prior_down else "neutral", 1, "open ≈ close with a long lower wick")
+        if upper(i) >= 0.6 * rng(i):
+            return ("Gravestone Doji", "bear" if prior_up else "neutral", 1, "open ≈ close with a long upper wick")
+        return ("Doji", "neutral", 1, "open ≈ close (body ≤ 10% of the range)")
+    if lower(i) >= 2 * small and upper(i) <= 0.15 * rng(i):
+        if prior_down:
+            return ("Hammer", "bull", 1, "small body at the top, lower wick ≥ 2× body, after a decline")
+        if prior_up:
+            return ("Hanging Man", "bear", 1, "hammer shape (long lower wick) appearing after a rise")
+        return None
+    if upper(i) >= 2 * small and lower(i) <= 0.15 * rng(i):
+        if prior_up:
+            return ("Shooting Star", "bear", 1, "small body at the bottom, upper wick ≥ 2× body, after a rise")
+        if prior_down:
+            return ("Inverted Hammer", "bull", 1, "small body at the bottom, long upper wick, after a decline")
+        return None
+    if body(i) >= 0.9 * rng(i) and rng(i) >= 1.3 * avg_rng:
+        return (("Bullish Marubozu", "bull", 1, "big green body with almost no wicks") if bull(i)
+                else ("Bearish Marubozu", "bear", 1, "big red body with almost no wicks"))
+    return None
+
+
+def _arrays(d):
+    return tuple(d[k].values.astype(float) for k in ("Open", "High", "Low", "Close"))
+
+
 def detect_patterns(d: pd.DataFrame, lookback: int = 5):
     """Return [(name, kind, bars_ago)] for patterns ending in the last `lookback` candles."""
     if len(d) < lookback + 10:
         return []
-    o, h, l, c = (d[k].values for k in ("Open", "High", "Low", "Close"))
-    found = []
+    o, h, l, c = _arrays(d)
     n = len(d)
-    for end in range(n - lookback, n):
-        ago = n - 1 - end
-
-        def body(i): return abs(c[i] - o[i])
-        def rng(i): return max(h[i] - l[i], 1e-9)
-        def upper(i): return h[i] - max(o[i], c[i])
-        def lower(i): return min(o[i], c[i]) - l[i]
-        def bull(i): return c[i] > o[i]
-        def bear(i): return c[i] < o[i]
-
-        i = end
-        prior_down = c[i - 1] < c[i - 6]
-        prior_up = c[i - 1] > c[i - 6]
-        avg_rng = float(pd.Series(h[i - 10:i] - l[i - 10:i]).mean())
-
-        # --- three-candle ---
-        a, b = i - 2, i - 1
-        if bear(a) and body(a) >= 0.5 * rng(a) and body(b) <= 0.35 * body(a) and bull(i) \
-                and c[i] > (o[a] + c[a]) / 2 and prior_down:
-            found.append(("Morning Star", "bull", ago)); continue
-        if bull(a) and body(a) >= 0.5 * rng(a) and body(b) <= 0.35 * body(a) and bear(i) \
-                and c[i] < (o[a] + c[a]) / 2 and prior_up:
-            found.append(("Evening Star", "bear", ago)); continue
-        if all(bull(k) and body(k) >= 0.5 * rng(k) for k in (a, b, i)) and c[a] < c[b] < c[i]:
-            found.append(("Three White Soldiers", "bull", ago)); continue
-        if all(bear(k) and body(k) >= 0.5 * rng(k) for k in (a, b, i)) and c[a] > c[b] > c[i]:
-            found.append(("Three Black Crows", "bear", ago)); continue
-
-        # --- two-candle ---
-        p = i - 1
-        strong = body(i) >= 0.5 * rng(i)
-        if bear(p) and bull(i) and strong and o[i] <= c[p] and c[i] >= o[p] and body(i) > body(p):
-            found.append(("Bullish Engulfing", "bull", ago)); continue
-        if bull(p) and bear(i) and strong and o[i] >= c[p] and c[i] <= o[p] and body(i) > body(p):
-            found.append(("Bearish Engulfing", "bear", ago)); continue
-        big_prev = body(p) >= 0.6 * rng(p) and rng(p) >= avg_rng
-        inside = max(o[i], c[i]) < max(o[p], c[p]) and min(o[i], c[i]) > min(o[p], c[p]) and body(i) <= 0.5 * body(p)
-        if big_prev and inside and bear(p) and bull(i) and prior_down:
-            found.append(("Bullish Harami", "bull", ago)); continue
-        if big_prev and inside and bull(p) and bear(i) and prior_up:
-            found.append(("Bearish Harami", "bear", ago)); continue
-        if bear(p) and bull(i) and abs(l[p] - l[i]) <= 0.05 * avg_rng and prior_down and body(p) >= 0.3 * rng(p):
-            found.append(("Tweezer Bottom", "bull", ago)); continue
-        if bull(p) and bear(i) and abs(h[p] - h[i]) <= 0.05 * avg_rng and prior_up and body(p) >= 0.3 * rng(p):
-            found.append(("Tweezer Top", "bear", ago)); continue
-        if bear(p) and bull(i) and o[i] < c[p] and c[i] > (o[p] + c[p]) / 2 and c[i] < o[p] and prior_down:
-            found.append(("Piercing Line", "bull", ago)); continue
-        if bull(p) and bear(i) and o[i] > c[p] and c[i] < (o[p] + c[p]) / 2 and c[i] > o[p] and prior_up:
-            found.append(("Dark Cloud Cover", "bear", ago)); continue
-
-        # --- single candle ---
-        small = max(body(i), 0.1 * rng(i))
-        if rng(i) < 0.3 * avg_rng:
-            continue  # too tiny to mean anything
-        if body(i) <= 0.1 * rng(i):
-            if lower(i) >= 0.6 * rng(i):
-                found.append(("Dragonfly Doji", "bull" if prior_down else "neutral", ago))
-            elif upper(i) >= 0.6 * rng(i):
-                found.append(("Gravestone Doji", "bear" if prior_up else "neutral", ago))
-            else:
-                found.append(("Doji", "neutral", ago))
-            continue
-        if lower(i) >= 2 * small and upper(i) <= 0.15 * rng(i):
-            if prior_down:
-                found.append(("Hammer", "bull", ago))
-            elif prior_up:
-                found.append(("Hanging Man", "bear", ago))
-            continue
-        if upper(i) >= 2 * small and lower(i) <= 0.15 * rng(i):
-            if prior_up:
-                found.append(("Shooting Star", "bear", ago))
-            elif prior_down:
-                found.append(("Inverted Hammer", "bull", ago))
-            continue
-        if body(i) >= 0.9 * rng(i) and rng(i) >= 1.3 * avg_rng:
-            found.append(("Bullish Marubozu" if bull(i) else "Bearish Marubozu", "bull" if bull(i) else "bear", ago))
+    found = []
+    for i in range(n - lookback, n):
+        r = detect_at(o, h, l, c, i)
+        if r:
+            found.append((r[0], r[1], n - 1 - i))
     found.sort(key=lambda x: x[2])
     return found
+
+
+def scan_history(d: pd.DataFrame):
+    """Every pattern occurrence in the history: list of (index, name, kind)."""
+    o, h, l, c = _arrays(d)
+    out = []
+    for i in range(10, len(d)):
+        r = detect_at(o, h, l, c, i)
+        if r:
+            out.append((i, r[0], r[1]))
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -809,7 +836,10 @@ upper wick to 2.15, lower wick to 1.95.</div></div>""", unsafe_allow_html=True)
                                           "<b style='color:" + BEAR + "'>red</b> = resistance, (3x) = touches.",
                                           "Green box = buy zone · red box = sell zone · orange dashed = stop.",
                                           "Blue dashed = trend forecast with likely range.",
-                                          "Add extra levels: swings, touches, volume profile, Fibonacci."]),
+                                          "Add extra levels: swings, touches, volume profile, Fibonacci.",
+                                          "Below the chart: <b>Summary</b>, <b>Audit</b> (how the score was calculated), "
+                                          "<b>Trade plan</b> (ATR stop, position size, Bursa fees, paper journal), "
+                                          "<b>Timeframes</b>, <b>Patterns</b>, <b>Forecast</b> (accuracy test) and <b>Data</b>."]),
             ("💰", "Dividends", ["Yield, how often they pay, next <b>ex-date</b>.",
                                  "✅ Confirmed = announced · 🕒 Estimated = same time as last year.",
                                  "Must own the shares <b>before</b> the ex-date."]),

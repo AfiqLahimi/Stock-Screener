@@ -17,6 +17,7 @@ from plotly.subplots import make_subplots
 import extras
 import learn
 import picks
+import ta_plus
 
 st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈", layout="wide")
 
@@ -50,6 +51,8 @@ NAME_TO_BURSA = {v: k for k, v in BURSA.items()}
 INTERVALS = {
     "Daily (1D)": ("1d", "2y", "trading days"),
     "Weekly (1W)": ("1wk", "10y", "weeks"),
+    "Monthly (1M)": ("1mo", "max", "months"),
+    "4 Hours": ("4h", "730d", "4-hour bars"),
     "1 Hour": ("1h", "6mo", "trading hours"),
     "15 Minutes": ("15m", "1mo", "15-minute bars"),
 }
@@ -109,7 +112,7 @@ def tv_symbol(t: str) -> str:
 def _demo(ticker: str, interval: str) -> pd.DataFrame:
     rng = np.random.default_rng(abs(hash((ticker, interval))) % 2**32)
     n = 500
-    freq = {"1d": "B", "1wk": "W-FRI", "1h": "h", "15m": "15min"}[interval]
+    freq = {"1d": "B", "1wk": "W-FRI", "1mo": "MS", "1h": "h", "15m": "15min"}[interval]
     idx = pd.date_range(end=pd.Timestamp.now().floor("h"), periods=n, freq=freq)
     close = 20 * np.exp(np.cumsum(rng.normal(0.0004, 0.018, n)))
     op = close * (1 + rng.normal(0, 0.006, n))
@@ -120,33 +123,74 @@ def _demo(ticker: str, interval: str) -> pd.DataFrame:
 
 
 def _clean(d: pd.DataFrame) -> pd.DataFrame:
+    """Data-integrity pass: keep complete, ordered, de-duplicated OHLCV rows only."""
     if isinstance(d.columns, pd.MultiIndex):
         d.columns = d.columns.get_level_values(0)
-    d = d[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+    d = d[["Open", "High", "Low", "Close", "Volume"]].copy()
+    n0 = len(d)
+    d = d[~d.index.duplicated(keep="last")].sort_index()
+    d = d.dropna(subset=["Open", "High", "Low", "Close"])
+    d = d[(d[["Open", "High", "Low", "Close"]] > 0).all(axis=1) & (d["High"] >= d["Low"])]
+    d["Volume"] = d["Volume"].fillna(0)
+    d.attrs["dropped_rows"] = int(n0 - len(d))
     return d
+
+
+def _resample_4h(h1: pd.DataFrame) -> pd.DataFrame:
+    """Yahoo has no 4-hour candles: build them from real 1-hour candles, 4 per block within each trading day."""
+    if h1.empty:
+        return h1
+    x = h1.copy()
+    day = x.index.normalize() if x.index.tz is None else x.index.tz_localize(None).normalize()
+    x["_day"] = day
+    x["_blk"] = x.groupby("_day").cumcount() // 4
+    g = x.groupby(["_day", "_blk"])
+    out = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
+                        "Close": g["Close"].last(), "Volume": g["Volume"].sum()})
+    x["_ts"] = x.index
+    out.index = pd.DatetimeIndex(x.groupby(["_day", "_blk"])["_ts"].first().tolist())  # keeps exchange timezone
+    out.attrs.update(h1.attrs)
+    return out
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_one(ticker: str, interval: str, period: str) -> pd.DataFrame:
     if DEMO:
-        return _demo(ticker, interval)
-    d = yf.download(ticker, period=period, interval=interval, auto_adjust=False,
-                    progress=False, threads=False)
+        d = _demo(ticker, "1h" if interval == "4h" else interval)
+        if interval == "4h":
+            d = _resample_4h(d)
+        d.attrs["fetched"] = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").isoformat()
+        d.attrs["source"] = "DEMO (synthetic)"
+        return d
+    src_iv = "1h" if interval == "4h" else interval
+    try:
+        d = yf.download(ticker, period=period, interval=src_iv, auto_adjust=False,
+                        progress=False, threads=False)
+    except Exception:
+        d = None
     if d is None or d.empty:
         return pd.DataFrame()
-    return _clean(d)
+    d = _clean(d)
+    if interval == "4h":
+        d = _resample_4h(d)
+    d.attrs["fetched"] = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").isoformat()
+    d.attrs["source"] = "Yahoo Finance (yfinance), unadjusted OHLC" + (" · 4H built from 1H" if interval == "4h" else "")
+    return d
 
 
 def _download_many(tickers: tuple, interval: str, period: str) -> dict:
     if DEMO:
-        return {t: _demo(t, interval) for t in tickers}
-    raw = yf.download(list(tickers), period=period, interval=interval, group_by="ticker",
+        return {t: (_resample_4h(_demo(t, "1h")) if interval == "4h" else _demo(t, interval)) for t in tickers}
+    src_iv = "1h" if interval == "4h" else interval
+    raw = yf.download(list(tickers), period=period, interval=src_iv, group_by="ticker",
                       auto_adjust=False, progress=False, threads=True)
     out = {}
     for t in tickers:
         try:
             d = raw[t] if isinstance(raw.columns, pd.MultiIndex) and len(tickers) > 1 else raw
             d = _clean(d.copy())
+            if interval == "4h":
+                d = _resample_4h(d)
             if len(d) > 60:
                 out[t] = d
         except Exception:
@@ -328,65 +372,77 @@ def find_levels(d: pd.DataFrame, lookback: int = 250, w: int = 5):
     return sup, res
 
 
-def score_signal(d: pd.DataFrame, sup, res):
+def score_factors(d: pd.DataFrame, sup, res):
+    """The scoring rules, one row per factor, with the actual reading and the points it earned.
+    Points are identical to the original scoring system; only the descriptions were made exact."""
     last, prev = d.iloc[-1], d.iloc[-2]
     price, atr = float(last["Close"]), float(last["ATR"])
-    s, why = 0, []
+    F = []
 
-    def add(pts, txt):
-        nonlocal s
-        s += pts
-        why.append((pts, txt))
+    def add(group, factor, reading, rule, pts, text):
+        F.append({"Group": group, "Factor": factor, "Reading": reading, "Rule": rule, "Points": pts, "text": text})
 
-    if price > last["EMA200"]:
-        add(15, "Price above EMA200: long-term uptrend")
-    else:
-        add(-15, "Price below EMA200: long-term downtrend")
-    if last["EMA50"] > last["EMA200"]:
-        add(10, "EMA50 above EMA200 (golden cross structure)")
-    else:
-        add(-10, "EMA50 below EMA200 (death cross structure)")
-    if price > last["EMA20"]:
-        add(10, "Price above EMA20: short-term momentum positive")
-    else:
-        add(-10, "Price below EMA20: short-term momentum weak")
+    e20, e50, e200 = float(last["EMA20"]), float(last["EMA50"]), float(last["EMA200"])
+    add("Trend", "Price vs EMA200", f"{price:.3f} vs {e200:.3f}", "above: +15 · below: −15",
+        15 if price > e200 else -15,
+        "Price above EMA200: long-term uptrend" if price > e200 else "Price below EMA200: long-term downtrend")
+    add("Trend", "EMA50 vs EMA200", f"{e50:.3f} vs {e200:.3f}", "above: +10 · below: −10",
+        10 if e50 > e200 else -10,
+        "EMA50 above EMA200 (golden cross structure)" if e50 > e200 else "EMA50 below EMA200 (death cross structure)")
+    add("Trend", "Price vs EMA20", f"{price:.3f} vs {e20:.3f}", "above: +10 · below: −10",
+        10 if price > e20 else -10,
+        "Price above EMA20: short-term momentum positive" if price > e20 else "Price below EMA20: short-term momentum weak")
 
     rsi = float(last["RSI"])
     if rsi < 30:
-        add(15, f"RSI {rsi:.0f}: oversold, potential bounce")
+        p_, t_ = 15, f"RSI {rsi:.0f}: oversold, potential bounce"
     elif rsi > 70:
-        add(-15, f"RSI {rsi:.0f}: overbought, pullback risk")
+        p_, t_ = -15, f"RSI {rsi:.0f}: overbought, pullback risk"
     elif rsi >= 50:
-        add(5, f"RSI {rsi:.0f}: buyers have momentum")
+        p_, t_ = 5, f"RSI {rsi:.0f}: buyers have momentum"
     else:
-        add(-5, f"RSI {rsi:.0f}: sellers have momentum")
+        p_, t_ = -5, f"RSI {rsi:.0f}: sellers have momentum"
+    add("Momentum", "RSI (14)", f"{rsi:.1f}", "<30: +15 · 30–50: −5 · 50–70: +5 · >70: −15", p_, t_)
 
-    if last["MACDhist"] > 0 and prev["MACDhist"] <= 0:
-        add(15, "MACD just crossed ABOVE the signal line")
-    elif last["MACDhist"] < 0 and prev["MACDhist"] >= 0:
-        add(-15, "MACD just crossed BELOW the signal line")
-    elif last["MACDhist"] > 0:
-        add(5, "MACD positive")
+    m, sg, h, hp = float(last["MACD"]), float(last["MACDsig"]), float(last["MACDhist"]), float(prev["MACDhist"])
+    reading = f"MACD {m:.4f} · signal {sg:.4f} · hist {h:+.4f}"
+    if h > 0 and hp <= 0:
+        p_, t_ = 15, "MACD line just crossed ABOVE the signal line (bullish crossover)"
+    elif h < 0 and hp >= 0:
+        p_, t_ = -15, "MACD line just crossed BELOW the signal line (bearish crossover)"
+    elif h > 0:
+        p_, t_ = 5, "MACD line above the signal line (bullish momentum)"
     else:
-        add(-5, "MACD negative")
+        p_, t_ = -5, "MACD line below the signal line (bearish momentum)"
+    add("Momentum", "MACD vs signal line", reading,
+        "cross above: +15 · cross below: −15 · above: +5 · below: −5", p_, t_)
 
     s1, r1 = sup[0][0], res[0][0]
     if price - s1 <= atr:
-        add(15, f"Price near support {s1:.3f} (low-risk entry area)")
+        add("Levels", "Near support", f"{price - s1:.3f} above S {s1:.3f} (ATR {atr:.3f})", "within 1 ATR: +15", 15,
+            f"Price near support {s1:.3f} (low-risk entry area)")
     if r1 - price <= atr and res[0][1] > 0:
-        add(-15, f"Price near resistance {r1:.3f} (limited upside)")
+        add("Levels", "Near resistance", f"{r1 - price:.3f} below R {r1:.3f} (ATR {atr:.3f})", "within 1 ATR: −15", -15,
+            f"Price near resistance {r1:.3f} (limited upside)")
     if prev["Close"] < s1 <= price:
-        add(10, f"Breakout: just closed above {s1:.3f}")
+        add("Levels", "Breakout", f"prev close {float(prev['Close']):.3f} → {price:.3f} over {s1:.3f}",
+            "closed above a level: +10", 10, f"Breakout: just closed above {s1:.3f}")
     if prev["Close"] > r1 >= price:
-        add(-10, f"Breakdown: just closed below {r1:.3f}")
+        add("Levels", "Breakdown", f"prev close {float(prev['Close']):.3f} → {price:.3f} under {r1:.3f}",
+            "closed below a level: −10", -10, f"Breakdown: just closed below {r1:.3f}")
 
-    if pd.notna(last["VolAvg"]) and last["Volume"] > 1.5 * last["VolAvg"]:
-        if price >= last["Open"]:
-            add(5, "High volume on a green candle (strong buyers)")
-        else:
-            add(-5, "High volume on a red candle (strong sellers)")
+    if pd.notna(last["VolAvg"]) and last["VolAvg"] > 0 and last["Volume"] > 1.5 * last["VolAvg"]:
+        green = price >= last["Open"]
+        add("Volume", "High-volume candle", f"{last['Volume'] / last['VolAvg']:.1f}× 20-bar avg on a "
+            f"{'green' if green else 'red'} candle", ">1.5× avg: green +5 · red −5", 5 if green else -5,
+            "High volume on a green candle (strong buyers)" if green else "High volume on a red candle (strong sellers)")
+    return F
 
-    s = int(max(-100, min(100, s)))
+
+def score_signal(d: pd.DataFrame, sup, res):
+    F = score_factors(d, sup, res)
+    s = int(max(-100, min(100, sum(f["Points"] for f in F))))
+    why = [(f["Points"], f["text"]) for f in F]
     if s >= 40:
         label = "STRONG BUY"
     elif s >= 15:
@@ -400,13 +456,13 @@ def score_signal(d: pd.DataFrame, sup, res):
     return s, label, why
 
 
-def trade_plan(d, sup, res, label, unit):
+def trade_plan(d, sup, res, label, unit, atr_mult: float = 1.0):
     last = d.iloc[-1]
     price, atr = float(last["Close"]), float(last["ATR"])
     s1, s2 = sup[0][0], sup[1][0]
     r1, r2 = res[0][0], res[1][0]
     buy_lo, buy_hi = s1, s1 + 0.5 * atr
-    stop = s1 - atr
+    stop = s1 - atr_mult * atr
     sell_lo, sell_hi = r1 - 0.5 * atr, r1
     entry = price if price <= buy_hi else (buy_lo + buy_hi) / 2
     risk = entry - stop
@@ -442,7 +498,7 @@ def trade_plan(d, sup, res, label, unit):
     return {
         "action": action, "when": when, "entry": entry, "buy_lo": buy_lo, "buy_hi": buy_hi,
         "stop": stop, "t1": r1, "t2": r2, "sell_lo": sell_lo, "sell_hi": sell_hi,
-        "rr1": rr1, "rr2": rr2, "bars_t1": bars_t1,
+        "rr1": rr1, "rr2": rr2, "bars_t1": bars_t1, "atr": atr, "atr_mult": atr_mult, "s1": s1, "s2": s2,
     }
 
 
@@ -530,7 +586,10 @@ def future_labels(d, n, interval):
     if interval == "1wk":
         idx = pd.date_range(last + pd.Timedelta(days=7), periods=n, freq="7D")
         return [f"{t.strftime('%d %b %y')} ·" for t in idx]
-    step = "h" if interval == "1h" else "×15m"
+    if interval == "1mo":
+        idx = pd.date_range(pd.Timestamp(last).tz_localize(None) + pd.offsets.MonthBegin(1), periods=n, freq="MS")
+        return [f"{t.strftime('%b %Y')} ·" for t in idx]
+    step = {"1h": "h", "4h": "×4h"}.get(interval, "×15m")
     return [f"+{k}{step}" for k in range(1, n + 1)]
 
 
@@ -924,21 +983,32 @@ def _draw_extras(fig, ex, labels):
             fig.add_hline(y=p, line=dict(color=rgba(teal, .45), width=1, dash="dot"), row=1, col=1)
 
 
-def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=None):
+CHART_PANELS = ["Volume", "RSI", "MACD", "ADX"]
+CHART_OVERLAYS = ["EMA 20/50/200", "Support/resistance & zones", "Breakout markers"]
+
+
+def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=None,
+               panels=tuple(CHART_PANELS), overlays=tuple(CHART_OVERLAYS)):
     x = d.tail(show_bars)
-    fmt = "%d %b %y" if interval in ("1d", "1wk") else "%d %b %H:%M"
+    fmt = {"1d": "%d %b %y", "1wk": "%d %b %y", "1mo": "%b %Y"}.get(interval, "%d %b %H:%M")
     labels = [ts.strftime(fmt) for ts in x.index]
     flabels = future_labels(d, fc["horizon"], interval) if fc else []
 
-    fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.025,
-                        row_heights=[0.48, 0.13, 0.13, 0.13, 0.13])
+    panels = [p_ for p_ in CHART_PANELS if p_ in panels]
+    rows = 1 + len(panels)
+    ROW = {p_: i + 2 for i, p_ in enumerate(panels)}
+    sub_h = 0.13 if rows > 1 else 0
+    heights = [1 - sub_h * (rows - 1)] + [sub_h] * (rows - 1)
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.025 if rows > 1 else 0.02,
+                        row_heights=heights)
     fig.add_trace(go.Candlestick(
         x=labels, open=x["Open"], high=x["High"], low=x["Low"], close=x["Close"], name=name,
         increasing=dict(line=dict(color=P["up"], width=1), fillcolor=P["up"]),
         decreasing=dict(line=dict(color=P["down"], width=1), fillcolor=P["down"])), 1, 1)
-    for n in (20, 50, 200):
-        fig.add_trace(go.Scatter(x=labels, y=x[f"EMA{n}"], name=f"EMA{n}",
-                                 line=dict(width=1.4, color=P[f"ema{n}"]), opacity=0.9), 1, 1)
+    if "EMA 20/50/200" in overlays:
+        for n in (20, 50, 200):
+            fig.add_trace(go.Scatter(x=labels, y=x[f"EMA{n}"], name=f"EMA{n}",
+                                     line=dict(width=1.4, color=P[f"ema{n}"]), opacity=0.9), 1, 1)
 
     if extra:
         _draw_extras(fig, extra, labels)
@@ -960,93 +1030,101 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
         fig.add_trace(go.Scatter(mode="lines", x=fx, y=[last] + list(fc["centre"]), name="Forecast",
                                  line=dict(color=P["accent"], width=2.2, dash="dash")), 1, 1)
         # keep RSI/MACD x-axes aligned with the extended price axis
-        for row in (2, 3, 4, 5):
+        for row in ROW.values():
             fig.add_trace(go.Scatter(mode="lines", x=flabels, y=[None] * len(flabels), showlegend=False, hoverinfo="skip"), row, 1)
 
-    fig.add_hrect(y0=plan["buy_lo"], y1=plan["buy_hi"], fillcolor=P["up"], opacity=0.10, line_width=0, row=1, col=1)
-    fig.add_hrect(y0=plan["sell_lo"], y1=plan["sell_hi"], fillcolor=P["down"], opacity=0.10, line_width=0, row=1, col=1)
-    for lvl, n in sup:
-        fig.add_hline(y=lvl, line=dict(color=rgba(P["up"], .7), width=1.2), row=1, col=1,
-                      annotation_text=f"S {lvl:.3f}" + (f" · {n}x" if n else ""), annotation_position="right",
-                      annotation_font=dict(color=P["up"], size=11))
-    for lvl, n in res:
-        fig.add_hline(y=lvl, line=dict(color=rgba(P["down"], .7), width=1.2), row=1, col=1,
-                      annotation_text=f"R {lvl:.3f}" + (f" · {n}x" if n else " · proj."), annotation_position="right",
-                      annotation_font=dict(color=P["down"], size=11))
-    fig.add_hline(y=plan["stop"], line=dict(color=P["warn"], width=1.1, dash="dash"), row=1, col=1,
-                  annotation_text=f"Stop {plan['stop']:.3f}", annotation_position="bottom right",
-                  annotation_font=dict(color=P["warn"], size=11))
+    if "Support/resistance & zones" in overlays:
+        fig.add_hrect(y0=plan["buy_lo"], y1=plan["buy_hi"], fillcolor=P["up"], opacity=0.10, line_width=0, row=1, col=1)
+        fig.add_hrect(y0=plan["sell_lo"], y1=plan["sell_hi"], fillcolor=P["down"], opacity=0.10, line_width=0, row=1, col=1)
+        for lvl, n in sup:
+            fig.add_hline(y=lvl, line=dict(color=rgba(P["up"], .7), width=1.2), row=1, col=1,
+                          annotation_text=f"S {lvl:.3f}" + (f" · {n}x" if n else ""), annotation_position="right",
+                          annotation_font=dict(color=P["up"], size=11))
+        for lvl, n in res:
+            fig.add_hline(y=lvl, line=dict(color=rgba(P["down"], .7), width=1.2), row=1, col=1,
+                          annotation_text=f"R {lvl:.3f}" + (f" · {n}x" if n else " · proj."), annotation_position="right",
+                          annotation_font=dict(color=P["down"], size=11))
+        fig.add_hline(y=plan["stop"], line=dict(color=P["warn"], width=1.1, dash="dash"), row=1, col=1,
+                      annotation_text=f"Stop {plan['stop']:.3f}", annotation_position="bottom right",
+                      annotation_font=dict(color=P["warn"], size=11))
 
-    # ---- volume panel
     rv = x["RVOL"].fillna(0).values
-    up_bar = (x["Close"] >= x["Open"]).values
-    vcolors = [P["warn"] if r >= SPIKE_RVOL else (rgba(P["up"], .55) if u else rgba(P["down"], .55))
-               for r, u in zip(rv, up_bar)]
-    fig.add_trace(go.Bar(x=labels, y=x["Volume"], name="Volume", marker_color=vcolors, showlegend=False,
-                         customdata=np.stack([rv], axis=-1),
-                         hovertemplate="Vol %{y:,.0f} · RVOL %{customdata[0]:.1f}×<extra></extra>"), 2, 1)
-    fig.add_trace(go.Scatter(x=labels, y=x["VolAvg20"], name="Avg volume (20)", mode="lines",
-                             line=dict(color=P["accent"], width=1.4)), 2, 1)
-    sp = [i for i, r in enumerate(rv) if r >= SPIKE_RVOL]
-    if sp:
-        fig.add_trace(go.Scatter(mode="text", x=[labels[i] for i in sp], y=[float(x["Volume"].iloc[i]) for i in sp],
-                                 text=["🚨" if rv[i] >= UNUSUAL_RVOL else "⚡" for i in sp], textposition="top center",
-                                 showlegend=False, hoverinfo="skip", textfont=dict(size=11)), 2, 1)
-    # breakout / breakdown markers on price, coloured by volume confirmation
-    bo_x, bo_y, bo_t, bo_c, bd_x, bd_y, bd_t, bd_c = [], [], [], [], [], [], [], []
-    for i in range(1, len(x)):
-        r = x.iloc[i]
-        if pd.isna(r["HH20"]) or pd.isna(r["LL20"]):
-            continue
-        rvi = float(r["RVOL"]) if pd.notna(r["RVOL"]) else 0
-        prev_c = float(x["Close"].iloc[i - 1])
-        if r["Close"] > r["HH20"] and prev_c <= float(x["HH20"].iloc[i - 1] or np.inf):
-            bo_x.append(labels[i]); bo_y.append(float(r["Low"]) * 0.985)
-            bo_t.append(f"Breakout · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
-            bo_c.append(P["up"] if rvi >= 1.5 else P["muted"])
-        elif r["Close"] < r["LL20"] and prev_c >= float(x["LL20"].iloc[i - 1] or -np.inf):
-            bd_x.append(labels[i]); bd_y.append(float(r["High"]) * 1.015)
-            bd_t.append(f"Breakdown · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
-            bd_c.append(P["down"] if rvi >= 1.5 else P["muted"])
-    if bo_x:
-        fig.add_trace(go.Scatter(mode="markers", x=bo_x, y=bo_y, name="20-bar breakout", text=bo_t,
-                                 hovertemplate="%{text}<extra></extra>",
-                                 marker=dict(symbol="star-triangle-up", size=11, color=bo_c,
-                                             line=dict(width=1, color=P["bg"]))), 1, 1)
-    if bd_x:
-        fig.add_trace(go.Scatter(mode="markers", x=bd_x, y=bd_y, name="20-bar breakdown", text=bd_t,
-                                 hovertemplate="%{text}<extra></extra>",
-                                 marker=dict(symbol="star-triangle-down", size=11, color=bd_c,
-                                             line=dict(width=1, color=P["bg"]))), 1, 1)
+    if "Volume" in ROW:
+        # ---- volume panel
+        rv = x["RVOL"].fillna(0).values
+        up_bar = (x["Close"] >= x["Open"]).values
+        vcolors = [P["warn"] if r >= SPIKE_RVOL else (rgba(P["up"], .55) if u else rgba(P["down"], .55))
+                   for r, u in zip(rv, up_bar)]
+        fig.add_trace(go.Bar(x=labels, y=x["Volume"], name="Volume", marker_color=vcolors, showlegend=False,
+                             customdata=np.stack([rv], axis=-1),
+                             hovertemplate="Vol %{y:,.0f} · RVOL %{customdata[0]:.1f}×<extra></extra>"), ROW['Volume'], 1)
+        fig.add_trace(go.Scatter(x=labels, y=x["VolAvg20"], name="Avg volume (20)", mode="lines",
+                                 line=dict(color=P["accent"], width=1.4)), ROW['Volume'], 1)
+        sp = [i for i, r in enumerate(rv) if r >= SPIKE_RVOL]
+        if sp:
+            fig.add_trace(go.Scatter(mode="text", x=[labels[i] for i in sp], y=[float(x["Volume"].iloc[i]) for i in sp],
+                                     text=["🚨" if rv[i] >= UNUSUAL_RVOL else "⚡" for i in sp], textposition="top center",
+                                     showlegend=False, hoverinfo="skip", textfont=dict(size=11)), ROW['Volume'], 1)
 
-    fig.add_trace(go.Scatter(x=labels, y=x["RSI"], name="RSI", line=dict(color=P["ema200"], width=1.4),
-                             showlegend=False), 3, 1)
-    fig.add_hrect(y0=30, y1=70, fillcolor=P["muted"], opacity=0.06, line_width=0, row=3, col=1)
-    fig.add_hline(y=70, line=dict(color=rgba(P["down"], .6), width=1, dash="dot"), row=3, col=1)
-    fig.add_hline(y=30, line=dict(color=rgba(P["up"], .6), width=1, dash="dot"), row=3, col=1)
-    colors = np.where(x["MACDhist"] >= 0, rgba(P["up"], .75), rgba(P["down"], .75))
-    fig.add_trace(go.Bar(x=labels, y=x["MACDhist"], name="MACD hist", marker_color=colors, showlegend=False), 4, 1)
-    fig.add_trace(go.Scatter(x=labels, y=x["MACD"], name="MACD", line=dict(color=P["ema50"], width=1.2),
-                             showlegend=False), 4, 1)
-    fig.add_trace(go.Scatter(x=labels, y=x["MACDsig"], name="Signal", line=dict(color=P["warn"], width=1.2),
-                             showlegend=False), 4, 1)
-    # ---- ADX panel
-    fig.add_hrect(y0=0, y1=ADX_WEAK, fillcolor=P["muted"], opacity=0.07, line_width=0, row=5, col=1)
-    fig.add_hline(y=ADX_STRONG, line=dict(color=rgba(P["text"], .35), width=1, dash="dot"), row=5, col=1,
-                  annotation_text="25 strong", annotation_position="right",
-                  annotation_font=dict(color=P["muted"], size=10))
-    fig.add_hline(y=ADX_WEAK, line=dict(color=rgba(P["text"], .25), width=1, dash="dot"), row=5, col=1,
-                  annotation_text="20 trend / no trend", annotation_position="right",
-                  annotation_font=dict(color=P["muted"], size=10))
-    fig.add_trace(go.Scatter(x=labels, y=x["PDI"], name="+DI", line=dict(color=P["up"], width=1.2),
-                             showlegend=False, hovertemplate="+DI %{y:.1f}<extra></extra>"), 5, 1)
-    fig.add_trace(go.Scatter(x=labels, y=x["MDI"], name="−DI", line=dict(color=P["down"], width=1.2),
-                             showlegend=False, hovertemplate="−DI %{y:.1f}<extra></extra>"), 5, 1)
-    fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", line=dict(color=P["text"], width=2),
-                             showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), 5, 1)
+    if "Breakout markers" in overlays:
+        # breakout / breakdown markers on price, coloured by volume confirmation
+        bo_x, bo_y, bo_t, bo_c, bd_x, bd_y, bd_t, bd_c = [], [], [], [], [], [], [], []
+        for i in range(1, len(x)):
+            r = x.iloc[i]
+            if pd.isna(r["HH20"]) or pd.isna(r["LL20"]):
+                continue
+            rvi = float(r["RVOL"]) if pd.notna(r["RVOL"]) else 0
+            prev_c = float(x["Close"].iloc[i - 1])
+            if r["Close"] > r["HH20"] and prev_c <= float(x["HH20"].iloc[i - 1] or np.inf):
+                bo_x.append(labels[i]); bo_y.append(float(r["Low"]) * 0.985)
+                bo_t.append(f"Breakout · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
+                bo_c.append(P["up"] if rvi >= 1.5 else P["muted"])
+            elif r["Close"] < r["LL20"] and prev_c >= float(x["LL20"].iloc[i - 1] or -np.inf):
+                bd_x.append(labels[i]); bd_y.append(float(r["High"]) * 1.015)
+                bd_t.append(f"Breakdown · RVOL {rvi:.1f}× · {'confirmed' if rvi >= 1.5 else 'weak volume'}")
+                bd_c.append(P["down"] if rvi >= 1.5 else P["muted"])
+        if bo_x:
+            fig.add_trace(go.Scatter(mode="markers", x=bo_x, y=bo_y, name="20-bar breakout", text=bo_t,
+                                     hovertemplate="%{text}<extra></extra>",
+                                     marker=dict(symbol="star-triangle-up", size=11, color=bo_c,
+                                                 line=dict(width=1, color=P["bg"]))), 1, 1)
+        if bd_x:
+            fig.add_trace(go.Scatter(mode="markers", x=bd_x, y=bd_y, name="20-bar breakdown", text=bd_t,
+                                     hovertemplate="%{text}<extra></extra>",
+                                     marker=dict(symbol="star-triangle-down", size=11, color=bd_c,
+                                                 line=dict(width=1, color=P["bg"]))), 1, 1)
+
+    if "RSI" in ROW:
+        fig.add_trace(go.Scatter(x=labels, y=x["RSI"], name="RSI", line=dict(color=P["ema200"], width=1.4),
+                                 showlegend=False), ROW['RSI'], 1)
+        fig.add_hrect(y0=30, y1=70, fillcolor=P["muted"], opacity=0.06, line_width=0, row=ROW['RSI'], col=1)
+        fig.add_hline(y=70, line=dict(color=rgba(P["down"], .6), width=1, dash="dot"), row=ROW['RSI'], col=1)
+        fig.add_hline(y=30, line=dict(color=rgba(P["up"], .6), width=1, dash="dot"), row=ROW['RSI'], col=1)
+    if "MACD" in ROW:
+        colors = np.where(x["MACDhist"] >= 0, rgba(P["up"], .75), rgba(P["down"], .75))
+        fig.add_trace(go.Bar(x=labels, y=x["MACDhist"], name="MACD hist", marker_color=colors, showlegend=False), ROW['MACD'], 1)
+        fig.add_trace(go.Scatter(x=labels, y=x["MACD"], name="MACD", line=dict(color=P["ema50"], width=1.2),
+                                 showlegend=False), ROW['MACD'], 1)
+        fig.add_trace(go.Scatter(x=labels, y=x["MACDsig"], name="Signal", line=dict(color=P["warn"], width=1.2),
+                                 showlegend=False), ROW['MACD'], 1)
+    if "ADX" in ROW:
+        # ---- ADX panel
+        fig.add_hrect(y0=0, y1=ADX_WEAK, fillcolor=P["muted"], opacity=0.07, line_width=0, row=ROW['ADX'], col=1)
+        fig.add_hline(y=ADX_STRONG, line=dict(color=rgba(P["text"], .35), width=1, dash="dot"), row=ROW['ADX'], col=1,
+                      annotation_text="25 strong", annotation_position="right",
+                      annotation_font=dict(color=P["muted"], size=10))
+        fig.add_hline(y=ADX_WEAK, line=dict(color=rgba(P["text"], .25), width=1, dash="dot"), row=ROW['ADX'], col=1,
+                      annotation_text="20 trend / no trend", annotation_position="right",
+                      annotation_font=dict(color=P["muted"], size=10))
+        fig.add_trace(go.Scatter(x=labels, y=x["PDI"], name="+DI", line=dict(color=P["up"], width=1.2),
+                                 showlegend=False, hovertemplate="+DI %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
+        fig.add_trace(go.Scatter(x=labels, y=x["MDI"], name="−DI", line=dict(color=P["down"], width=1.2),
+                                 showlegend=False, hovertemplate="−DI %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
+        fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", line=dict(color=P["text"], width=2),
+                                 showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
 
     fig.update_layout(
-        template="plotly_dark", height=1020, margin=dict(l=8, r=96, t=36, b=8),
+        template="plotly_dark", height=560 + 115 * (rows - 1), margin=dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=P["text"], size=12),
         xaxis_rangeslider_visible=False, hovermode="x unified",
@@ -1066,10 +1144,15 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     lo_r, hi_r = min(lo_v), max(hi_v)
     pad = (hi_r - lo_r) * 0.05
     fig.update_yaxes(range=[lo_r - pad, hi_r + pad], row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=2, col=1, title_font=dict(color=P["muted"], size=11), rangemode="tozero")
-    fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1, title_font=dict(color=P["muted"], size=11))
-    fig.update_yaxes(title_text="MACD", row=4, col=1, title_font=dict(color=P["muted"], size=11))
-    fig.update_yaxes(title_text="ADX / DI", row=5, col=1, title_font=dict(color=P["muted"], size=11), rangemode="tozero")
+    tf_ = dict(color=P["muted"], size=11)
+    if "Volume" in ROW:
+        fig.update_yaxes(title_text="Volume", row=ROW["Volume"], col=1, title_font=tf_, rangemode="tozero")
+    if "RSI" in ROW:
+        fig.update_yaxes(title_text="RSI", range=[0, 100], row=ROW["RSI"], col=1, title_font=tf_)
+    if "MACD" in ROW:
+        fig.update_yaxes(title_text="MACD", row=ROW["MACD"], col=1, title_font=tf_)
+    if "ADX" in ROW:
+        fig.update_yaxes(title_text="ADX / DI", row=ROW["ADX"], col=1, title_font=tf_, rangemode="tozero")
     return fig
 
 
@@ -1178,6 +1261,10 @@ with st.sidebar:
         bursa_filter = (tuple(sectors_sel), min_price, min_value, max_n)
     tf_name = st.selectbox("Timeframe", list(INTERVALS.keys()), index=0)
     interval, period, unit = INTERVALS[tf_name]
+    closed_only = st.toggle("Signals on completed candles only", value=True, key="closed_only",
+                            help="While the market is open the latest candle is still forming and can change. "
+                                 "When on, the Analysis tab calculates signals from the last COMPLETED candle "
+                                 "(the live price is still shown).")
     st.divider()
     auto = st.toggle("Auto refresh", value=False)
     every = st.select_slider("Refresh every (seconds)", [30, 60, 120, 300], value=60, disabled=not auto)
@@ -1333,260 +1420,713 @@ with tab_an:
     lookback = c4.selectbox("Trend based on", [30, 60, 120], index=1, format_func=lambda v: f"last {v} bars")
     ticker = normalise(typed) if typed.strip() else pick
     st.session_state["an_ticker"] = ticker
+    cur = "RM" if ticker.endswith(".KL") else "$"
 
     with st.spinner(f"Fetching {ticker}..."):
-        df = load_one(ticker, interval, period)
+        df_raw = load_one(ticker, interval, period)
 
-    if df.empty or len(df) < 60:
-        st.error(f"Not enough data found for **{ticker}**. For Bursa use the 4-digit code + .KL (e.g. 1155.KL) or a name "
-                 f"from the list; for US use the normal ticker (e.g. NVDA).")
+    if df_raw.empty or len(df_raw) < 60:
+        st.error(f"Not enough data found for **{ticker}** on this timeframe ({len(df_raw)} candles). For Bursa use the "
+                 f"4-digit code + .KL (e.g. 1155.KL) or a name from the list; for US use the normal ticker (e.g. NVDA).")
     else:
+        dq, cstat = ta_plus.data_quality(df_raw, interval, ticker)
+        live_price = float(df_raw["Close"].iloc[-1])
+        df = df_raw.iloc[:-1] if (closed_only and cstat["forming"]) else df_raw
         d, sup, res, sc, label, why = analyse(df)
-        plan = trade_plan(d, sup, res, label, unit)
+        atr_mult = float(st.session_state.get("ts_atr", 1.0))
+        plan = trade_plan(d, sup, res, label, unit, atr_mult=atr_mult)
         fc = trend_forecast(d, horizon=horizon, lookback=min(lookback, len(d) - 2))
-        bar_word_a = {"1d": "day", "1wk": "week", "1h": "hour", "15m": "bar"}.get(interval, "bar")
+        bar_word_a = {"1d": "day", "1wk": "week", "1mo": "month", "4h": "4-hour bar", "1h": "hour",
+                      "15m": "bar"}.get(interval, "bar")
+        bar_word = bar_word_a
         ax = adx_analysis(d, bar_word_a)
+        va = volume_analysis(d, bar_word)
+        vol = ta_plus.volatility(d)
         last, prev = d.iloc[-1], d.iloc[-2]
         price = float(last["Close"])
         chg = (price / float(prev["Close"]) - 1) * 100
         chg_col = P["up"] if chg >= 0 else P["down"]
         dir_col = {"Uptrend": P["up"], "Downtrend": P["down"]}.get(fc["direction"], P["muted"])
+        vol_col = {"Low": P["up"], "Moderate": P["warn"], "High": P["down"]}.get(vol["cls"] if vol else "", P["muted"])
 
+        # ---- status badges (data integrity)
+        badges = []
+        if cstat["forming"]:
+            badges.append(pill(f"● Live candle forming · live {cur}{live_price:,.3f}"
+                               + (" · signals use last completed candle" if closed_only else ""), P["warn"]))
+        if cstat["stale"]:
+            badges.append(pill("⚠ Data looks stale: check the symbol or try again later", P["down"]))
+        badges.append(pill(f"Market {'open' if cstat['open'] else 'closed'} · {cstat['exchange']}", P["muted"]))
         st.markdown(f"""
 <div class="card"><div class="head">
   <div><div class="name">{display_name(ticker)} · {ticker}</div>
        <div><span class="price">{price:,.3f}</span><span class="chg" style="color:{chg_col}">{chg:+.2f}%</span></div></div>
   <div><div class="name">Signal</div>{pill(label, LABEL_COLOR[label])}</div>
   <div><div class="name">Score</div><div style="font-size:20px;font-weight:600">{sc:+d}<span class="muted"> / 100</span></div></div>
-  <div><div class="name">Trend forecast</div>{pill(f"{fc['arrow']} {fc['direction']} · {fc['strength']}", dir_col)}</div>
-  <div><div class="name">Trend strength (ADX)</div>{pill(f"{ax['regime']} · {ax['adx']:.0f}", regime_color(ax['regime'])) if ax else pill("n/a", P['muted'])}</div>
+  <div><div class="name">Trend strength (ADX)</div>{pill(f"{ax['regime']} · {ax['adx']:.0f}", regime_color(ax['regime'])) if ax else pill("N/A", P['muted'])}</div>
+  <div><div class="name">Volatility (ATR)</div>{pill(f"{vol['cls']} · {vol['atrp']:.2f}%", vol_col) if vol else pill("N/A", P['muted'])}</div>
   <div><div class="name">RSI</div><div style="font-size:20px;font-weight:600">{last['RSI']:.0f}</div></div>
-  <div style="margin-left:auto" class="muted">Last data {d.index[-1].strftime('%d %b %Y %H:%M')}<br>{tf_name}</div>
-</div></div>""", unsafe_allow_html=True)
+  <div style="margin-left:auto" class="muted">Last candle used: {d.index[-1].strftime('%d %b %Y %H:%M')}<br>{tf_name} · {len(d)} candles
+   · fetched {pd.Timestamp(dq['Fetched']).strftime('%H:%M:%S') if dq['Fetched'] != 'n/a' else 'n/a'}</div>
+</div><div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">{''.join(badges)}</div></div>""",
+                    unsafe_allow_html=True)
 
-        t1, t2 = st.columns([1, 3])
-        show_fc = t1.toggle("Show trend forecast", value=True)
-        extra_sel = t2.multiselect("Extra support / resistance (optional)", EXTRA_OPTS, default=[],
-                                   placeholder="Add swing highs/lows, repeated touches, volume profile, Fibonacci…",
-                                   key="extra_sel")
+        # ---- chart controls
+        k1, k2, k3, k4 = st.columns([0.8, 1.6, 1.4, 1.5])
+        show_fc = k1.toggle("Trend forecast", value=True)
+        extra_sel = k2.multiselect("Extra support / resistance", EXTRA_OPTS, default=[],
+                                   placeholder="Swings, touches, volume profile, Fibonacci…", key="extra_sel")
+        panels = k3.multiselect("Indicator panels", CHART_PANELS, default=CHART_PANELS, key="panels")
+        overlays = k4.multiselect("Price overlays", CHART_OVERLAYS, default=CHART_OVERLAYS, key="overlays")
         extra, extra_rows = compute_extra_levels(d, extra_sel) if extra_sel else ({}, [])
         st.plotly_chart(make_chart(d, sup, res, plan, display_name(ticker), interval, fc if show_fc else None,
-                                   extra=extra),
+                                   extra=extra, panels=panels, overlays=overlays),
                         width="stretch", config={"displaylogo": False, "scrollZoom": True})
-        if extra_sel:
-            legend_bits = {
-                "Swing highs/lows": "▼ pink / ▲ teal = swing highs / lows, dotted = the 3 most recent of each",
-                "Repeated touches (3+)": "teal long-dash ⟷ = price levels touched 3+ times (thicker = more touches)",
-                "Volume profile": "bars on the right = volume traded at each price · orange POC = most traded "
-                                  "price · VAH/VAL = range holding 70% of volume",
-                "Fibonacci retracement": "gold dotted = Fibonacci levels of the latest big swing "
-                                         "(38.2%, 50%, 61.8% are the key ones)",
-            }
-            st.markdown("<div class='note'>" + " · ".join(legend_bits[k] for k in extra_sel) + "</div>",
+        legend_bits = []
+        if "Support/resistance & zones" in overlays:
+            legend_bits.append("green/red lines = support/resistance (×N touches) · green band = buy zone · red band = "
+                               "sell zone · orange dashed = stop loss")
+        if show_fc:
+            legend_bits.append("blue dashed = trend forecast with nominal 68%/95% bands (see Forecast accuracy)")
+        if "Volume" in panels:
+            legend_bits.append(f"volume: blue line = 20-bar average, <span style='color:{P['warn']}'>orange ⚡</span> = "
+                               f"spike 2×+, 🚨 = 3×+")
+        if "Breakout markers" in overlays:
+            legend_bits.append("★ = 20-bar breakout/breakdown (coloured = volume-confirmed, grey = weak volume)")
+        if "ADX" in panels:
+            legend_bits.append("ADX panel: white = ADX, green = +DI, red = −DI")
+        extra_legend = {
+            "Swing highs/lows": "▼▲ = swing highs/lows",
+            "Repeated touches (3+)": "teal ⟷ = levels touched 3+ times",
+            "Volume profile": "right-side bars = volume by price, POC/VAH/VAL",
+            "Fibonacci retracement": "gold dotted = Fibonacci levels",
+        }
+        legend_bits += [extra_legend[k] for k in extra_sel]
+        st.markdown("<div class='note'>" + " · ".join(legend_bits) + "</div>", unsafe_allow_html=True)
+
+        # ---- other timeframes (real data only; used by MTF tab, audit and summary)
+        with st.spinner("Loading other timeframes…"):
+            tf_rows, tf_data = {}, {}
+            for key, lab, iv, per in ta_plus.TIMEFRAMES:
+                tdf = df_raw if key == interval else load_one(ticker, iv, per)
+                if tdf is None or tdf.empty:
+                    tf_rows[key] = {"available": False, "candles": 0, "reason": "no data from the source"}
+                    continue
+                tst = ta_plus.candle_status(tdf, key, ticker)
+                use = tdf.iloc[:-1] if (closed_only and tst["forming"]) else tdf
+                tf_data[key] = use
+                r_ = ta_plus.tf_analysis(use, add_indicators)
+                r_["forming"] = tst["forming"]
+                r_["stale"] = tst["stale"]
+                tf_rows[key] = r_
+        mtf = ta_plus.mtf_summary(tf_rows)
+        pats_full = ta_plus.pattern_report(d, sup, res)
+        bt_df, bt_m = ta_plus.walk_forward(d["Close"].values, fc["horizon"], fc["lookback"])
+
+        tabs = st.tabs(["🧠 Summary", "🧮 Audit", "📋 Trade plan", "⏱️ Timeframes", "📊 Volume", "📐 ADX",
+                        "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
+
+        # ================= Summary
+        with tabs[0]:
+            head, secs = ta_plus.narrative(display_name(ticker), ticker, d, sup, res, plan, va, ax, mtf, fc, vol,
+                                           pats_full, cstat, (bt_df, bt_m))
+            st.markdown(f"""
+<div class="card" style="border-left:3px solid {P['accent']}">
+<h3>🧠 Analysis summary</h3>
+<div style="font-size:15.5px;line-height:1.7">{head}</div>
+<div class="note">Written automatically from the indicator values calculated on this page (rule-based; every number
+comes from the data, nothing is invented). Not investment advice.</div></div>""", unsafe_allow_html=True)
+            order = ["Overall trend", "Short-term momentum", "Long-term trend", "Support & resistance",
+                     "Volume behaviour", "RSI & MACD", "ADX trend strength", "Multi-timeframe", "Volatility",
+                     "Bullish scenario", "Bearish scenario", "Suggested entry conditions",
+                     "Risk factors & invalidation"]
+            icons = {"Bullish scenario": "🟢", "Bearish scenario": "🔴", "Suggested entry conditions": "🎯",
+                     "Risk factors & invalidation": "⚠️"}
+            cards = "".join(
+                f"<div class='card' style='margin:0'><div class='muted' style='font-size:12px;text-transform:uppercase;"
+                f"letter-spacing:.05em'>{icons.get(k, '•')} {k}</div><div style='margin-top:6px;line-height:1.6'>"
+                f"{secs[k]}</div></div>" for k in order if k in secs)
+            st.markdown(f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px'>"
+                        f"{cards}</div>", unsafe_allow_html=True)
+
+        # ================= Signal audit
+        with tabs[1]:
+            F = score_factors(d, sup, res)
+            total = sum(f["Points"] for f in F)
+            st.markdown(f"""
+<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+<h3 style="margin:0">🧮 How the score was calculated</h3>{pill(f"{label} · {sc:+d}", LABEL_COLOR[label])}</div>
+<div class="muted" style="margin-top:8px">Raw total {total:+d} (capped to ±100). Labels: ≥ +40 STRONG BUY · +15…+39 BUY ·
+−14…+14 NEUTRAL · −15…−39 SELL · ≤ −40 STRONG SELL. Each row shows the actual reading, the rule and the points.</div></div>""",
                         unsafe_allow_html=True)
-        st.markdown(f"<div class='note'>Green band = buy zone · red band = sell zone · dashed orange = stop loss · "
-                    f"S/R lines show how many times price touched them · blue dashed = forecast with 68% (darker) "
-                    f"and 95% (lighter) ranges · <b>Volume panel</b>: blue line = 20-bar average, "
-                    f"<span style='color:{P['warn']}'>orange bars ⚡</span> = spike (2×+), 🚨 = unusual (3×+) · "
-                    f"★ on price = 20-bar breakout/breakdown (coloured = confirmed by volume, grey = weak volume)"
-                    f"</div>", unsafe_allow_html=True)
+            aud = pd.DataFrame([{k: f[k] for k in ("Group", "Factor", "Reading", "Rule", "Points")} for f in F])
+            st.dataframe(aud, hide_index=True, width="stretch",
+                         column_config={"Points": st.column_config.NumberColumn(format="%+d", width="small")})
+            grp = aud.groupby("Group", sort=False)["Points"].sum()
+            gtxt = " · ".join(f"<b>{g}</b> {v:+d}" for g, v in grp.items())
+            st.markdown(f"<div class='note'>Subtotals: {gtxt}. The three EMA checks share one <b>Trend</b> group "
+                        f"(max ±35) because they tend to move together: read them as one trend vote.</div>",
+                        unsafe_allow_html=True)
+            # context rows (not scored, avoids double counting)
+            m_, sg_, h_ = float(last["MACD"]), float(last["MACDsig"]), float(last["MACDhist"])
+            zero_cross = None
+            mz = d["MACD"].tail(6).values
+            for k_ in range(len(mz) - 1, 0, -1):
+                if mz[k_] > 0 >= mz[k_ - 1]:
+                    zero_cross = f"MACD line crossed ABOVE zero {len(mz) - 1 - k_} bar(s) ago"
+                    break
+                if mz[k_] < 0 <= mz[k_ - 1]:
+                    zero_cross = f"MACD line crossed BELOW zero {len(mz) - 1 - k_} bar(s) ago"
+                    break
+            ctx_rows = [
+                {"Context": "MACD line", "Reading": f"{m_:.4f}", "Meaning": "fast EMA(12) − slow EMA(26)"},
+                {"Context": "MACD signal line", "Reading": f"{sg_:.4f}", "Meaning": "9-period EMA of the MACD line"},
+                {"Context": "MACD histogram", "Reading": f"{h_:+.4f}",
+                 "Meaning": "MACD − signal: above 0 = line above signal (bullish momentum); below 0 = bearish momentum"},
+                {"Context": "MACD vs zero line", "Reading": "above zero" if m_ > 0 else "below zero",
+                 "Meaning": ("positive MACD regime (fast EMA above slow EMA)" if m_ > 0 else
+                             "negative MACD regime (fast EMA below slow EMA)")
+                            + (f" · {zero_cross} (zero-line cross ≠ signal-line crossover)" if zero_cross else "")},
+                {"Context": "ADX trend strength", "Reading": f"{ax['adx']:.1f} · {ax['regime']}" if ax else "N/A",
+                 "Meaning": "strength only; direction from +DI/−DI"},
+                {"Context": "Volume confirmation", "Reading": va["verdict"] if va else "N/A",
+                 "Meaning": f"RVOL {va['rvol']:.2f}×" if va else ""},
+                {"Context": "Multi-timeframe (swing)", "Reading": mtf["swing"],
+                 "Meaning": f"bullish on {', '.join(mtf['bulls']) or 'none'} · bearish on {', '.join(mtf['bears']) or 'none'}"},
+            ]
+            st.markdown("**Context checks (shown for transparency, not added to the score)**")
+            st.dataframe(pd.DataFrame(ctx_rows), hide_index=True, width="stretch")
+            st.markdown("<div class='note'>Why not scored: the MACD zero line and ADX direction largely repeat what the EMA "
+                        "trend factors already measure, and volume / multi-timeframe are reported separately so the "
+                        "original score stays comparable. MACD rules used: line above signal = bullish momentum; line "
+                        "crossing above signal = bullish crossover; line above zero = positive regime. These are "
+                        "different events and are reported separately.</div>", unsafe_allow_html=True)
 
-        # ---- Volume analysis card
-        bar_word = {"1d": "day", "1wk": "week", "1h": "hour", "15m": "bar"}.get(interval, "bar")
-        va = volume_analysis(d, bar_word)
-        if va is None:
-            st.info("Not enough volume data for a volume analysis.")
-        else:
-            rv_col = P["warn"] if va["rvol"] >= SPIKE_RVOL else (P["up"] if va["rvol"] >= 1.2 else
-                                                                 (P["muted"] if va["rvol"] >= 0.8 else P["down"]))
-            ud_txt = "∞" if np.isinf(va["ud"]) else f"{va['ud']:.2f}"
-            ud_col = P["up"] if va["ud"] >= 1.3 else (P["down"] if va["ud"] <= 0.77 else P["muted"])
-            ud_lab = "accumulation" if va["ud"] >= 1.3 else ("distribution" if va["ud"] <= 0.77 else "balanced")
-            part_txt = "–" if pd.isna(va["part"]) else f"{va['part']:.2f}×"
-            if va["brk"]:
-                b = va["brk"]
-                gcol = {"Confirmed": P["up"] if b["type"] == "Breakout" else P["down"], "Moderate": P["warn"],
-                        "Weak": P["muted"]}[b["grade"]]
-                when = "latest bar" if b["bars_ago"] == 0 else f"{b['bars_ago']} bar(s) ago"
-                brk_html = (f"{pill(b['type'] + ' · ' + b['grade'], gcol)}<div class='muted' style='margin-top:6px'>"
-                            f"{b['type']} of the 20-bar {'high' if b['type'] == 'Breakout' else 'low'} "
-                            f"{b['level']:.3f} ({when}) on <b>{b['rvol']:.1f}×</b> normal volume. "
-                            + ("Strong volume = real buyers behind it." if b['grade'] == 'Confirmed' and b['type'] == 'Breakout'
-                               else "Strong volume = real selling behind it." if b['grade'] == 'Confirmed'
-                               else "Volume is so-so: wait for follow-through." if b['grade'] == 'Moderate'
-                               else "Low volume: higher risk of a fakeout.") + "</div>")
+        # ================= Trade plan & sizing
+        with tabs[2]:
+            st.markdown("##### ⚙️ Your trade settings")
+            s1c, s2c, s3c, s4c = st.columns(4)
+            capital = s1c.number_input(f"Trading capital ({cur})", min_value=100.0, value=10000.0, step=500.0,
+                                       key="ts_capital")
+            risk_pct = s2c.number_input("Risk per trade (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.25,
+                                        key="ts_risk")
+            max_loss = s3c.number_input(f"Max loss per trade ({cur}, 0 = no cap)", min_value=0.0, value=0.0,
+                                        step=10.0, key="ts_maxloss")
+            s4c.select_slider("Stop distance (× ATR below support)", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0], value=1.0,
+                              key="ts_atr")
+            with st.expander("Broker fees" + (" (Bursa)" if ticker.endswith(".KL") else " (US)")):
+                f1, f2, f3, f4 = st.columns(4)
+                brk_pct = f1.number_input("Brokerage (%)", 0.0, 1.0, 0.08, 0.01, format="%.3f", key="ts_brk")
+                brk_min = f2.number_input("Minimum brokerage (RM)", 0.0, 50.0, 8.0, 1.0, key="ts_brkmin")
+                platform = f3.number_input("Platform fee per order (RM)", 0.0, 20.0, 0.0, 0.5, key="ts_plat")
+                us_comm = f4.number_input("US commission per order ($)", 0.0, 20.0, 0.0, 0.5, key="ts_uscomm")
+                st.caption("Bursa: clearing 0.03% (max RM1,000) and stamp duty RM1 per RM1,000 (max RM1,000) are "
+                           "added automatically on both buy and sell. Ordinary-share brokerage is SST-exempt; the "
+                           "platform fee gets 8% SST. Set brokerage to your broker's rate.")
+            cfg = {"capital": capital, "risk_pct": risk_pct, "max_loss": max_loss, "brk_pct": brk_pct,
+                   "brk_min": brk_min, "platform": platform, "us_commission": us_comm}
+
+            rt = lambda p_, m_="nearest": ta_plus.round_tick(p_, ticker, m_)  # noqa: E731
+            entry = rt(plan["entry"])
+            stop = rt(plan["stop"], "down")
+            t1, t2 = rt(plan["t1"], "down"), rt(plan["t2"], "down")
+            buy_lo, buy_hi = rt(plan["buy_lo"]), rt(plan["buy_hi"])
+            ps = ta_plus.position_size(entry, stop, ticker, cfg)
+            atr_v = plan["atr"]
+            if vol:
+                st.markdown(f"""
+<div class="card"><h3>🌡️ Volatility (ATR 14)</h3>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+ <div><div class="muted">ATR (14)</div><div style="font-size:20px;font-weight:600">{cur}{vol['atr']:.3f}</div></div>
+ <div><div class="muted">ATR % of price</div><div style="font-size:20px;font-weight:600">{vol['atrp']:.2f}%</div></div>
+ <div><div class="muted">Volatility</div>{pill(vol['cls'], vol_col)}<div class="muted" style="font-size:12px">
+   {f"{vol['pct']:.0f}th percentile of last {vol['n']} candles" if vol['pct'] is not None else 'needs ≥ 60 candles'}</div></div>
+ <div><div class="muted">ATR stop</div><div style="font-size:20px;font-weight:600">{cur}{stop:.3f}</div>
+   <div class="muted" style="font-size:12px">support {cur}{plan['s1']:.3f} − {atr_mult:g} × ATR</div></div>
+</div>
+<div class="note">ATR = average size of one {bar_word}'s move (Wilder, 14). Classification compares today's ATR% with this
+stock's own last {vol['n']} candles: bottom third = Low, middle = Moderate, top third = High. Because the stop sits a fixed
+number of ATRs away, position size automatically shrinks when the stock is more volatile.</div></div>""",
+                            unsafe_allow_html=True)
+            if ps is None or ps["shares"] == 0:
+                st.warning("With these settings the position size is 0: the stop is too far for your risk budget "
+                           "(or price exceeds capital). Lower the ATR multiple, raise risk %, or choose a cheaper stock.")
+            if ps:
+                sh = ps["shares"]
+                lot = ps["lot"]
+                be = ta_plus.break_even(sh, entry, ticker, cfg) if sh else None
+                p1 = ta_plus.net_pnl(sh, entry, t1, ticker, cfg) if sh else 0
+                p2 = ta_plus.net_pnl(sh, entry, t2, ticker, cfg) if sh else 0
+                half1, half2 = ta_plus.split_partial(sh, lot)
+                part = (ta_plus.net_pnl(half1, entry, t1, ticker, cfg) + ta_plus.net_pnl(half2, entry, t2, ticker, cfg)
+                        if half2 else p1)
+                part_be = (ta_plus.net_pnl(half1, entry, t1, ticker, cfg) +
+                           (ta_plus.net_pnl(half2, entry, be, ticker, cfg) if be else 0)) if half2 else p1
+                loss = ps["loss"]
+                rr_net1 = p1 / loss if loss > 0 else np.nan
+                rr_net2 = p2 / loss if loss > 0 else np.nan
+                trail_now = max(stop, float(d["Close"].tail(10).max()) - 2 * atr_v)
+                lots_txt = f" ({sh // 100} lots)" if lot == 100 else ""
+                fb = ps["buy_fees"]["total"]
+                plan_rows = [
+                    ("Entry price (reference)", f"{cur}{entry:.3f}"),
+                    ("Buy zone", f"{cur}{buy_lo:.3f} – {cur}{buy_hi:.3f}"),
+                    ("Stop loss", f"{cur}{stop:.3f} ({(stop / entry - 1) * 100:.1f}%)"),
+                    ("Target 1", f"{cur}{t1:.3f} ({(t1 / entry - 1) * 100:+.1f}%)"),
+                    ("Target 2", f"{cur}{t2:.3f} ({(t2 / entry - 1) * 100:+.1f}%)"),
+                    ("Risk : Reward (gross)", "–" if np.isnan(plan['rr1']) else f"1 : {plan['rr1']:.2f} / 1 : {plan['rr2']:.2f}"),
+                    ("Risk : Reward (after fees)", "–" if np.isnan(rr_net1) else f"1 : {rr_net1:.2f} / 1 : {rr_net2:.2f}"),
+                ]
+                size_rows = [
+                    ("Risk budget", f"{cur}{ps['budget']:,.2f} ({ps['binding']})"),
+                    ("Position size", f"{sh:,} shares{lots_txt}"),
+                    ("Required capital", f"{cur}{ps['cost']:,.2f} (incl. {cur}{fb:,.2f} buy fees)"),
+                    ("Maximum monetary risk", f"{cur}{loss:,.2f} if stopped (incl. fees both ways)"),
+                    ("Break-even price", f"{cur}{be:.3f}" if be else "N/A"),
+                    ("Net profit at T1 / T2", f"{cur}{p1:,.2f} / {cur}{p2:,.2f}"),
+                ]
+                kv = lambda rows: "".join(f"<tr><td>{a}</td><td>{b}</td></tr>" for a, b in rows)  # noqa: E731
+                pc1, pc2 = st.columns(2, gap="medium")
+                when_html = re.sub(r"[*][*](.+?)[*][*]", r"<b>\1</b>", plan["when"])
+                pc1.markdown(f"<div class='card'><h3>📋 Trade plan</h3><div class='action'>{plan['action']}</div>"
+                             f"<table class='kv'>{kv(plan_rows)}</table><div class='when'>"
+                             f"{when_html}</div>"
+                             f"<div class='note'>Prices rounded to the exchange tick size"
+                             f"{' (Bursa: 0.5 sen < RM1, 1 sen < RM10, 2 sen < RM100)' if ticker.endswith('.KL') else ''}."
+                             f"</div></div>", unsafe_allow_html=True)
+                pc2.markdown(f"<div class='card'><h3>🧮 Position sizing</h3><table class='kv'>{kv(size_rows)}</table>"
+                             f"<div class='note'>Size = largest {'board-lot (100-share) ' if lot == 100 else ''}quantity "
+                             f"whose loss at the stop, including buy and sell fees, stays within the smaller of "
+                             f"{risk_pct:g}% of capital and your max-loss cap, and whose cost fits your capital.</div></div>",
+                             unsafe_allow_html=True)
+                mgmt = [
+                    ("💰 Partial profit-taking",
+                     f"Sell {half1:,} shares at T1 {cur}{t1:.3f} and {half2:,} at T2 {cur}{t2:.3f} → net "
+                     f"{cur}{part:,.2f}. If the rest is stopped at break-even after T1: net {cur}{part_be:,.2f}."
+                     if half2 else f"Position too small to split into board lots: sell all at T1 (net {cur}{p1:,.2f})."),
+                    ("🔒 Trailing stop",
+                     f"After T1, move the stop to break-even ({cur}{be:.3f}). Then trail it at the highest close − 2 × ATR "
+                     f"(right now that would be {cur}{trail_now:.3f}); only ever move it up." if be else "N/A"),
+                    ("⛔ Trade invalidation",
+                     f"Exit if a {bar_word} closes below the stop {cur}{stop:.3f}; reassess if price closes below support "
+                     f"{cur}{plan['s1']:.3f}, if ADX turns Strong Bearish, if a breakout entry falls back below "
+                     f"{cur}{plan['t1']:.3f} on volume, or if T1 isn't reached within about "
+                     f"{2 * (plan['bars_t1'] or 5)} {bar_word}s (time stop)."),
+                ]
+                st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px'>"
+                            + "".join(f"<div class='card' style='margin:0'><b>{a}</b><div style='margin-top:6px;"
+                                      f"line-height:1.6'>{b}</div></div>" for a, b in mgmt) + "</div>",
+                            unsafe_allow_html=True)
+                if ps["buy_fees"].get("brokerage") is not None and sh:
+                    fb_ = ps["buy_fees"]
+                    st.caption(f"Buy-side fees for {sh:,} shares: brokerage {cur}{fb_['brokerage']:.2f} · clearing "
+                               f"{cur}{fb_['clearing']:.2f} · stamp duty {cur}{fb_['stamp']:.2f}"
+                               + (f" · platform {cur}{fb_['platform']:.2f}" if fb_['platform'] else "")
+                               + ". Sell-side fees are similar and are included in the risk and profit numbers.")
+
+                # ---- paper trading journal
+                st.markdown("##### 📝 Paper-trading journal")
+                st.caption("Manual and paper trading only: this app never places real orders.")
+                jcol1, jcol2 = st.columns([1, 3])
+                if jcol1.button("➕ Add this plan as a paper trade", disabled=not sh):
+                    st.session_state.setdefault("paper", []).append({
+                        "Opened": pd.Timestamp.now(tz="Asia/Kuala_Lumpur").strftime("%Y-%m-%d %H:%M"),
+                        "Ticker": ticker, "Name": display_name(ticker), "Entry": entry, "Stop": stop,
+                        "T1": t1, "T2": t2, "Shares": sh})
+                up = jcol2.file_uploader("Restore a saved journal (CSV)", type="csv", label_visibility="collapsed")
+                if up is not None and not st.session_state.get("_paper_loaded"):
+                    st.session_state["paper"] = pd.read_csv(up).to_dict("records")
+                    st.session_state["_paper_loaded"] = True
+                paper = st.session_state.get("paper", [])
+                if paper:
+                    rows_ = []
+                    for tr_ in paper:
+                        px = load_one(tr_["Ticker"], "1d", "1y")
+                        now_p = float(px["Close"].iloc[-1]) if not px.empty else np.nan
+                        since = px[px.index >= pd.Timestamp(tr_["Opened"][:10])] if not px.empty else px
+                        status = "Open"
+                        if len(since):
+                            if float(since["Low"].min()) <= tr_["Stop"]:
+                                status = "Stop hit"
+                            elif float(since["High"].max()) >= tr_["T2"]:
+                                status = "T2 hit"
+                            elif float(since["High"].max()) >= tr_["T1"]:
+                                status = "T1 hit"
+                        pnl = ta_plus.net_pnl(int(tr_["Shares"]), tr_["Entry"], now_p, tr_["Ticker"], cfg) \
+                            if not np.isnan(now_p) else np.nan
+                        rows_.append({**tr_, "Now": now_p, "Status": status, "Net P/L (if sold now)": pnl})
+                    jdf = pd.DataFrame(rows_)
+                    st.dataframe(jdf, hide_index=True, width="stretch",
+                                 column_config={"Net P/L (if sold now)": st.column_config.NumberColumn(format="%.2f"),
+                                                "Now": st.column_config.NumberColumn(format="%.3f")})
+                    st.caption("Journal is kept for this browser session. Copy it to keep it: select the table → "
+                               "Download (top-right of the table), then restore it next time with the uploader above.")
+                    if st.button("🗑️ Clear journal"):
+                        st.session_state["paper"] = []
+                        st.session_state["_paper_loaded"] = False
+                        st.rerun()
+
+        # ================= Multi-timeframe
+        with tabs[3]:
+            lab_of = {k: lab for k, lab, _, _ in ta_plus.TIMEFRAMES}
+            avail = [k for k, _, _, _ in ta_plus.TIMEFRAMES if tf_rows.get(k, {}).get("available")]
+            missing = [f"{lab_of[k]} ({tf_rows[k].get('reason', 'n/a')})" for k, _, _, _ in ta_plus.TIMEFRAMES
+                       if not tf_rows.get(k, {}).get("available")]
+            sw_col = {"Aligned bullish": P["up"], "Aligned bearish": P["down"], "Conflict": P["warn"]}.get(
+                mtf["swing"], P["muted"])
+            sig_col = lambda s_: P["up"] if "Bullish" in s_ else (P["down"] if "Bearish" in s_ else P["muted"])  # noqa: E731
+            cards = ""
+            for k in avail:
+                r_ = tf_rows[k]
+                sw = " · swing priority" if k in ta_plus.SWING_WEIGHTS else ""
+                cards += f"""<div class='card' style='margin:0;border-top:3px solid {sig_col(r_['signal'])}'>
+<div style='display:flex;justify-content:space-between;align-items:center'><b>{lab_of[k]}</b>{pill(r_['signal'], sig_col(r_['signal']))}</div>
+<div class='muted' style='font-size:12px;margin:2px 0 8px'>{r_['candles']} candles{sw}{' · last candle excluded (forming)' if (r_.get('forming') and closed_only) else ''}{' · ⚠ stale' if r_.get('stale') else ''}</div>
+<table class='kv'><tr><td>Trend</td><td>{r_['trend']}</td></tr><tr><td>EMA alignment</td><td style='font-weight:500'>{r_['ema']}</td></tr>
+<tr><td>RSI</td><td>{r_['rsi']:.1f} · {r_['rsi_txt']}</td></tr><tr><td>MACD</td><td style='font-weight:500'>{r_['macd_txt']}</td></tr>
+<tr><td>Score</td><td>{r_['score']:+d} / ±7</td></tr></table></div>"""
+            warn = ""
+            if mtf["disagree"]:
+                warn = (f"<div class='reason'><span>⚠️</span><span style='color:{P['warn']}'>Timeframes disagree: bullish on "
+                        f"{', '.join(lab_of[k] for k in mtf['bulls'])}; bearish on "
+                        f"{', '.join(lab_of[k] for k in mtf['bears'])}. Lower timeframes often pull back against "
+                        f"the bigger trend; trade in the direction of the higher timeframe.</span></div>")
+            st.markdown(f"""
+<div class="card" style="border-left:3px solid {sw_col}">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+<h3 style="margin:0">⏱️ Multi-timeframe analysis</h3>{pill('Swing (W/D/4H): ' + mtf['swing'], sw_col)}</div>
+<div class="muted" style="margin-top:8px">For swing trading the Weekly (×3), Daily (×2) and 4-Hour (×1) timeframes are weighted
+most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>{warn}</div>""", unsafe_allow_html=True)
+            st.markdown(f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'>"
+                        f"{cards}</div>", unsafe_allow_html=True)
+            if missing:
+                st.caption("Not shown (insufficient real data, nothing is filled in): " + "; ".join(missing))
+            st.markdown("<div class='note'>Per-timeframe score (±7): trend ±2 (price vs EMA50 and its slope) · EMA "
+                        "alignment ±2 (±1 if EMA200 unavailable) · RSI +1 (55–70) / −1 (30–45) · MACD ±1 vs signal line "
+                        "and ±1 vs zero line. ≥ +2 Bullish, ≥ +5 Strong Bullish (same for bearish). EMA200 needs ≥ 250 "
+                        "candles and EMA50 ≥ 100, otherwise shown as N/A. 4-Hour candles are built from real 1-hour "
+                        "candles (Yahoo has no 4H feed).</div>", unsafe_allow_html=True)
+
+        # ================= Volume
+        with tabs[4]:
+            # ---- Volume analysis card
+            if va is None:
+                st.info("Not enough volume data for a volume analysis.")
             else:
-                brk_html = "<div class='muted'>No 20-bar breakout or breakdown in the last 10 bars.</div>"
-            flags_html = "".join(f"<div class='reason'><span>{ic}</span><span style='color:{c}'>{t}</span></div>"
-                                 for ic, t, c in va["flags"]) or "<div class='muted'>Nothing unusual right now.</div>"
-            why_html = "".join(f"<div class='reason'><span>•</span><span>{w}</span></div>" for w in va["why"])
-            spk = va["spikes"][-6:][::-1]
-            spk_html = "".join(
-                f"<div class='reason'><span style='min-width:70px'>{z['date'].strftime('%d %b')}</span>"
-                f"<b style='color:{P['warn']};min-width:52px'>{z['rvol']:.1f}×</b>"
-                f"<span style='color:{P['up'] if z['chg'] >= 0 else P['down']}'>{z['chg']:+.1f}%</span>"
-                f"<span class='muted'>{'🚨 unusual' if z['rvol'] >= UNUSUAL_RVOL else '⚡ spike'}</span></div>"
-                for z in spk) or "<div class='muted'>No spikes (2×+) in the last 60 bars.</div>"
-            st.markdown(f"""
-<div class="card" style="border-left:3px solid {va['vcol']}">
+                rv_col = P["warn"] if va["rvol"] >= SPIKE_RVOL else (P["up"] if va["rvol"] >= 1.2 else
+                                                                     (P["muted"] if va["rvol"] >= 0.8 else P["down"]))
+                ud_txt = "∞" if np.isinf(va["ud"]) else f"{va['ud']:.2f}"
+                ud_col = P["up"] if va["ud"] >= 1.3 else (P["down"] if va["ud"] <= 0.77 else P["muted"])
+                ud_lab = "accumulation" if va["ud"] >= 1.3 else ("distribution" if va["ud"] <= 0.77 else "balanced")
+                part_txt = "–" if pd.isna(va["part"]) else f"{va['part']:.2f}×"
+                if va["brk"]:
+                    b = va["brk"]
+                    gcol = {"Confirmed": P["up"] if b["type"] == "Breakout" else P["down"], "Moderate": P["warn"],
+                            "Weak": P["muted"]}[b["grade"]]
+                    when = "latest bar" if b["bars_ago"] == 0 else f"{b['bars_ago']} bar(s) ago"
+                    brk_html = (f"{pill(b['type'] + ' · ' + b['grade'], gcol)}<div class='muted' style='margin-top:6px'>"
+                                f"{b['type']} of the 20-bar {'high' if b['type'] == 'Breakout' else 'low'} "
+                                f"{b['level']:.3f} ({when}) on <b>{b['rvol']:.1f}×</b> normal volume. "
+                                + ("Strong volume = real buyers behind it." if b['grade'] == 'Confirmed' and b['type'] == 'Breakout'
+                                   else "Strong volume = real selling behind it." if b['grade'] == 'Confirmed'
+                                   else "Volume is so-so: wait for follow-through." if b['grade'] == 'Moderate'
+                                   else "Low volume: higher risk of a fakeout.") + "</div>")
+                else:
+                    brk_html = "<div class='muted'>No 20-bar breakout or breakdown in the last 10 bars.</div>"
+                flags_html = "".join(f"<div class='reason'><span>{ic}</span><span style='color:{c}'>{t}</span></div>"
+                                     for ic, t, c in va["flags"]) or "<div class='muted'>Nothing unusual right now.</div>"
+                why_html = "".join(f"<div class='reason'><span>•</span><span>{w}</span></div>" for w in va["why"])
+                spk = va["spikes"][-6:][::-1]
+                spk_html = "".join(
+                    f"<div class='reason'><span style='min-width:70px'>{z['date'].strftime('%d %b')}</span>"
+                    f"<b style='color:{P['warn']};min-width:52px'>{z['rvol']:.1f}×</b>"
+                    f"<span style='color:{P['up'] if z['chg'] >= 0 else P['down']}'>{z['chg']:+.1f}%</span>"
+                    f"<span class='muted'>{'🚨 unusual' if z['rvol'] >= UNUSUAL_RVOL else '⚡ spike'}</span></div>"
+                    for z in spk) or "<div class='muted'>No spikes (2×+) in the last 60 bars.</div>"
+                st.markdown(f"""
+    <div class="card" style="border-left:3px solid {va['vcol']}">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">📊 Volume analysis</h3>{pill(va['verdict'], va['vcol'])}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0">
+      <div><div class="muted">Volume (latest)</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['vol'])}</div></div>
+      <div><div class="muted">20-{bar_word} average</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['avg'])}</div></div>
+      <div><div class="muted">Relative volume (RVOL)</div><div style="font-size:20px;font-weight:600;color:{rv_col}">{va['rvol']:.2f}×</div></div>
+      <div><div class="muted">Last 5 vs average</div><div style="font-size:20px;font-weight:600">{part_txt}</div></div>
+      <div><div class="muted">Up / down volume (20)</div><div style="font-size:20px;font-weight:600;color:{ud_col}">{ud_txt}</div>
+           <div class="muted" style="font-size:12px">{ud_lab}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+      <div><b>Is the move backed by volume?</b>{why_html}</div>
+      <div><b>Breakout confirmation</b><div style="margin-top:8px">{brk_html}</div>
+           <div style="margin-top:14px"><b>Unusual activity</b></div>{flags_html}</div>
+      <div><b>Recent volume spikes (last 60 bars)</b>{spk_html}</div>
+    </div>
+    <div class="note">RVOL = today's volume ÷ average of the previous 20 {bar_word}s. 1× = normal, 2×+ = spike, 3×+ = unusual.
+    Price moves on high volume are more trustworthy; moves on low volume often fade. Up/down volume above 1 = more shares
+    traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
+
+        # ================= ADX
+        with tabs[5]:
+            if not ax:
+                st.info("Not enough candles for ADX (needs about 30).")
+            # ---- ADX card
+            if ax:
+                rc = regime_color(ax["regime"])
+                gauge_w = min(ax["adx"], 60) / 60 * 100
+                di_total = ax["pdi"] + ax["mdi"] or 1
+                pdi_w = ax["pdi"] / di_total * 100
+                trend_arrow = "↗ rising" if ax["rising"] else ("↘ falling" if ax["falling"] else "→ flat")
+                notes_html = "".join(f"<div class='reason'><span>•</span><span>{n}</span></div>" for n in ax["notes"])
+                regimes = ["Strong Bearish Trend", "Weak Bearish Trend", "Sideways Market", "Weak Bullish Trend",
+                           "Strong Bullish Trend"]
+                scale = "".join(
+                    f"<div style='flex:1;text-align:center;padding:7px 4px;border-radius:8px;font-size:12px;"
+                    f"background:{rgba(regime_color(r_), .22 if r_ == ax['regime'] else .06)};"
+                    f"color:{regime_color(r_) if r_ == ax['regime'] else P['muted']};"
+                    f"font-weight:{700 if r_ == ax['regime'] else 500};"
+                    f"border:1px solid {rgba(regime_color(r_), .6) if r_ == ax['regime'] else P['border']}'>{r_}</div>"
+                    for r_ in regimes)
+                st.markdown(f"""
+    <div class="card" style="border-left:3px solid {rc}">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">📐 Trend strength (ADX 14)</h3>{pill(ax['regime'], rc)}</div>
+    <div style="display:flex;gap:6px;margin:14px 0 16px;flex-wrap:wrap">{scale}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px">
+     <div>
+      <div class="muted">ADX: how strong (not which way)</div>
+      <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:28px;font-weight:700">{ax['adx']:.1f}</span>
+       <span class="muted">{trend_arrow} (5 {bar_word_a}s ago {ax['adx5']:.1f})</span></div>
+      <div style="position:relative;height:10px;border-radius:6px;background:{P['card2']};margin:8px 0 4px;overflow:hidden">
+       <div style="position:absolute;left:0;top:0;bottom:0;width:{gauge_w:.0f}%;background:{rc};opacity:.85"></div>
+       <div style="position:absolute;left:{20/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div>
+       <div style="position:absolute;left:{25/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div></div>
+      <div class="muted" style="font-size:11.5px;display:flex;justify-content:space-between">
+       <span>0 · no trend</span><span>20</span><span>25 · strong</span><span>40+ · very strong</span></div>
+     </div>
+     <div>
+      <div class="muted">+DI vs −DI: which side is winning (direction)</div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:600">
+       <span style="color:{P['up']}">+DI {ax['pdi']:.1f} buyers</span><span style="color:{P['down']}">sellers −DI {ax['mdi']:.1f}</span></div>
+      <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;margin-top:6px">
+       <div style="width:{pdi_w:.0f}%;background:{P['up']};opacity:.8"></div>
+       <div style="flex:1;background:{P['down']};opacity:.8"></div></div>
+      <div class="muted" style="font-size:11.5px;margin-top:4px">{'Buyers' if ax['pdi'] >= ax['mdi'] else 'Sellers'} have the upper hand
+       (gap {abs(ax['pdi'] - ax['mdi']):.1f})</div>
+     </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:14px">
+     <div><b>What the indicators say</b>{notes_html}</div>
+     <div><b>How to trade this condition</b><div class="reason"><span>🧭</span><span>{ax['playbook']}</span></div></div>
+    </div>
+    <div class="note">ADX below 20 = sideways (direction ignored) · 20–25 = weak trend · 25+ = strong trend. The direction comes from
+    +DI (buying pressure) vs −DI (selling pressure). ADX rises in strong up-trends <i>and</i> strong down-trends, so it never
+    tells direction on its own. Chart: bottom panel, white = ADX, green = +DI, red = −DI.</div></div>""", unsafe_allow_html=True)
+            st.write("")
+
+        # ================= Patterns
+        with tabs[6]:
+            st.markdown("<div class='note'>Patterns in the last 5 candles. Each is checked against the trend before "
+                        "it and nearby support/resistance; reversal patterns in the wrong place are marked low "
+                        "reliability rather than turned into signals.</div>", unsafe_allow_html=True)
+            if not pats_full:
+                st.info("No candlestick pattern in the last 5 candles.")
+            for p_ in pats_full:
+                kc = {"bull": P["up"], "bear": P["down"]}.get(p_["kind"], P["muted"])
+                kind_txt = {"bull": "Bullish", "bear": "Bearish"}.get(p_["kind"], "Neutral")
+                perf = p_["perf"]
+                if perf.get("win") is not None:
+                    perf_txt = (f"{perf['n']} earlier times in this stock's history: price was "
+                                f"{'higher' if p_['kind'] != 'bear' else 'lower'} {p_['fwd']} {bar_word}s later "
+                                f"<b>{perf['win']:.0f}%</b> of the time (vs {perf['base']:.0f}% for any random "
+                                f"{bar_word}), average move {perf['avg']:+.2f}%.")
+                else:
+                    perf_txt = f"Insufficient history (only {perf['n']} earlier occurrence(s); needs ≥ 5)."
+                when = "latest candle" if p_["bars_ago"] == 0 else f"{p_['bars_ago']} candle(s) ago"
+                use_col = (P["up"] if p_["use"].startswith("Actionable") else
+                           P["down"] if p_["use"].startswith(("Ignore", "Low")) else P["warn"])
+                st.markdown(f"""
+<div class="card" style="border-left:3px solid {kc}">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-  <h3 style="margin:0">📊 Volume analysis</h3>{pill(va['verdict'], va['vcol'])}</div>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0">
-  <div><div class="muted">Volume (latest)</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['vol'])}</div></div>
-  <div><div class="muted">20-{bar_word} average</div><div style="font-size:20px;font-weight:600">{fmt_vol(va['avg'])}</div></div>
-  <div><div class="muted">Relative volume (RVOL)</div><div style="font-size:20px;font-weight:600;color:{rv_col}">{va['rvol']:.2f}×</div></div>
-  <div><div class="muted">Last 5 vs average</div><div style="font-size:20px;font-weight:600">{part_txt}</div></div>
-  <div><div class="muted">Up / down volume (20)</div><div style="font-size:20px;font-weight:600;color:{ud_col}">{ud_txt}</div>
-       <div class="muted" style="font-size:12px">{ud_lab}</div></div>
-</div>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
-  <div><b>Is the move backed by volume?</b>{why_html}</div>
-  <div><b>Breakout confirmation</b><div style="margin-top:8px">{brk_html}</div>
-       <div style="margin-top:14px"><b>Unusual activity</b></div>{flags_html}</div>
-  <div><b>Recent volume spikes (last 60 bars)</b>{spk_html}</div>
-</div>
-<div class="note">RVOL = today's volume ÷ average of the previous 20 {bar_word}s. 1× = normal, 2×+ = spike, 3×+ = unusual.
-Price moves on high volume are more trustworthy; moves on low volume often fade. Up/down volume above 1 = more shares
-traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
+ <div><b style="font-size:16px">{p_['name']}</b> <span class="muted">· {when}</span></div>
+ <div>{pill(kind_txt, kc)} {pill(p_['use'].split(':')[0], use_col)}</div></div>
+<table class="kv" style="margin-top:10px">
+<tr><td>Detection</td><td style="font-weight:500">{p_['rule']}</td></tr>
+<tr><td>Context</td><td style="font-weight:500">{p_['context']} · context {p_['ctx_grade'].lower()}</td></tr>
+<tr><td>Confirmation</td><td style="font-weight:500">{p_['confirmation']}</td></tr>
+<tr><td>Historical performance</td><td style="font-weight:500">{perf_txt}</td></tr>
+<tr><td>How to use</td><td style="font-weight:500">{p_['use']}</td></tr></table></div>""", unsafe_allow_html=True)
+                with st.expander(f"Candle formation details · {p_['name']}"):
+                    st.dataframe(pd.DataFrame(p_["candles"]), hide_index=True, width="stretch",
+                                 column_config={c_: st.column_config.NumberColumn(format="%.3f")
+                                                for c_ in ("Open", "High", "Low", "Close")}
+                                 | {c_: st.column_config.NumberColumn(format="%.0f%%")
+                                    for c_ in ("Body % of range", "Upper wick %", "Lower wick %")})
+            st.markdown("<div class='note'>Confirmation = a later candle (within 3) closes beyond the pattern's high "
+                        "(bullish) or low (bearish). Historical performance only uses earlier occurrences with a full "
+                        "5-candle window afterwards (no look-ahead). See 🎓 Learn → Candlestick Patterns.</div>",
+                        unsafe_allow_html=True)
 
-        # ---- ADX card
-        if ax:
-            rc = regime_color(ax["regime"])
-            gauge_w = min(ax["adx"], 60) / 60 * 100
-            di_total = ax["pdi"] + ax["mdi"] or 1
-            pdi_w = ax["pdi"] / di_total * 100
-            trend_arrow = "↗ rising" if ax["rising"] else ("↘ falling" if ax["falling"] else "→ flat")
-            notes_html = "".join(f"<div class='reason'><span>•</span><span>{n}</span></div>" for n in ax["notes"])
-            regimes = ["Strong Bearish Trend", "Weak Bearish Trend", "Sideways Market", "Weak Bullish Trend",
-                       "Strong Bullish Trend"]
-            scale = "".join(
-                f"<div style='flex:1;text-align:center;padding:7px 4px;border-radius:8px;font-size:12px;"
-                f"background:{rgba(regime_color(r_), .22 if r_ == ax['regime'] else .06)};"
-                f"color:{regime_color(r_) if r_ == ax['regime'] else P['muted']};"
-                f"font-weight:{700 if r_ == ax['regime'] else 500};"
-                f"border:1px solid {rgba(regime_color(r_), .6) if r_ == ax['regime'] else P['border']}'>{r_}</div>"
-                for r_ in regimes)
+        # ================= Forecast & accuracy
+        with tabs[7]:
+            # ---- Forecast
+            h = fc["horizon"]
+            unit_short = unit.split()[-1]
+            cross_up = first_cross(fc["centre"], plan["t1"], up=True)
+            cross_dn = first_cross(fc["centre"], sup[0][0], up=False)
+            if fc["direction"] == "Uptrend":
+                hint = (f"If this pace holds, price could reach resistance <b>{plan['t1']:.3f}</b> in about "
+                        f"<b>{cross_up} {unit_short}</b>, a likely area for sellers / taking profit."
+                        if cross_up else f"At this pace, price stays below resistance {plan['t1']:.3f} within {h} {unit_short}.")
+            elif fc["direction"] == "Downtrend":
+                hint = (f"If this pace holds, price could drop to support <b>{sup[0][0]:.3f}</b> in about "
+                        f"<b>{cross_dn} {unit_short}</b>. Watch there for a bounce (buy) or a break (more downside)."
+                        if cross_dn else f"At this pace, price stays above support {sup[0][0]:.3f} within {h} {unit_short}.")
+            else:
+                hint = (f"No reliable trend: price is moving sideways. Range traders buy near support "
+                        f"{sup[0][0]:.3f} and sell near resistance {plan['t1']:.3f}.")
             st.markdown(f"""
-<div class="card" style="border-left:3px solid {rc}">
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-  <h3 style="margin:0">📐 Trend strength (ADX 14)</h3>{pill(ax['regime'], rc)}</div>
-<div style="display:flex;gap:6px;margin:14px 0 16px;flex-wrap:wrap">{scale}</div>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px">
- <div>
-  <div class="muted">ADX: how strong (not which way)</div>
-  <div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:28px;font-weight:700">{ax['adx']:.1f}</span>
-   <span class="muted">{trend_arrow} (5 {bar_word_a}s ago {ax['adx5']:.1f})</span></div>
-  <div style="position:relative;height:10px;border-radius:6px;background:{P['card2']};margin:8px 0 4px;overflow:hidden">
-   <div style="position:absolute;left:0;top:0;bottom:0;width:{gauge_w:.0f}%;background:{rc};opacity:.85"></div>
-   <div style="position:absolute;left:{20/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div>
-   <div style="position:absolute;left:{25/60*100:.1f}%;top:0;bottom:0;width:2px;background:{P['bg']}"></div></div>
-  <div class="muted" style="font-size:11.5px;display:flex;justify-content:space-between">
-   <span>0 · no trend</span><span>20</span><span>25 · strong</span><span>40+ · very strong</span></div>
- </div>
- <div>
-  <div class="muted">+DI vs −DI: which side is winning (direction)</div>
-  <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:600">
-   <span style="color:{P['up']}">+DI {ax['pdi']:.1f} buyers</span><span style="color:{P['down']}">sellers −DI {ax['mdi']:.1f}</span></div>
-  <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;margin-top:6px">
-   <div style="width:{pdi_w:.0f}%;background:{P['up']};opacity:.8"></div>
-   <div style="flex:1;background:{P['down']};opacity:.8"></div></div>
-  <div class="muted" style="font-size:11.5px;margin-top:4px">{'Buyers' if ax['pdi'] >= ax['mdi'] else 'Sellers'} have the upper hand
-   (gap {abs(ax['pdi'] - ax['mdi']):.1f})</div>
- </div>
+    <div class="card"><h3>Trend forecast · next {h} {unit_short}</h3>
+    <div style="margin-bottom:10px">{pill(f"{fc['arrow']} {fc['direction']}", dir_col)} {pill(f"{fc['strength']} trend · R² {fc['r2']:.2f}", P['muted'])}</div>
+    <table class="kv">
+    <tr><td>Projected price</td><td>{fc['centre'][-1]:.3f} <span class="muted">({fc['total']:+.1f}%)</span></td></tr>
+    <tr><td>Likely range (68%)</td><td>{fc['lo1'][-1]:.3f} – {fc['hi1'][-1]:.3f}</td></tr>
+    <tr><td>Wide range (95%)</td><td>{fc['lo2'][-1]:.3f} – {fc['hi2'][-1]:.3f}</td></tr>
+    <tr><td>Trend speed</td><td>{fc['per_bar']:+.2f}% per bar</td></tr>
+    <tr><td>Momentum</td><td style="font-weight:500">{fc['momentum']}</td></tr>
+    </table>
+    <div style="margin-top:12px;font-size:14px;line-height:1.5">{hint}</div>
+    <div class="note">How it works: a trend line is fitted to the last {fc['lookback']} bars and extended forward; the bands
+    come from the stock's normal volatility. It shows where price goes <i>if the current trend continues</i>. News, results and
+    market moves can break any trend, so treat it as a guide, not a prediction. R² near 1 = clean trend, near 0 = choppy.</div>
+    </div>""", unsafe_allow_html=True)
+            st.markdown("#### 🎯 How accurate has this forecast been? (walk-forward test)")
+            if bt_m is None:
+                st.info("Not enough history for an out-of-sample test.")
+            else:
+                cov_note = ta_plus.calibration_note(bt_m)
+                skill_col = P["up"] if bt_m["skill"] > 0 else P["down"]
+                st.markdown(f"""
+<div class="card"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+ <div><div class="muted">Forecasts tested</div><div style="font-size:20px;font-weight:600">{bt_m['n']}</div></div>
+ <div><div class="muted">Directional accuracy</div><div style="font-size:20px;font-weight:600">{bt_m['dir_acc']:.0f}%</div>
+   <div class="muted" style="font-size:12px">'always up' would score {bt_m['up_rate']:.0f}%</div></div>
+ <div><div class="muted">MAE</div><div style="font-size:20px;font-weight:600">{cur}{bt_m['mae']:.3f}</div>
+   <div class="muted" style="font-size:12px">{bt_m['mape']:.1f}% of price</div></div>
+ <div><div class="muted">RMSE</div><div style="font-size:20px;font-weight:600">{cur}{bt_m['rmse']:.3f}</div></div>
+ <div><div class="muted">vs 'no change' guess</div><div style="font-size:20px;font-weight:600;color:{skill_col}">{bt_m['skill']:+.0f}%</div>
+   <div class="muted" style="font-size:12px">naive MAE {cur}{bt_m['naive_mae']:.3f}</div></div>
+ <div><div class="muted">Band coverage 68% / 95%</div><div style="font-size:20px;font-weight:600">{bt_m['cov68']:.0f}% / {bt_m['cov95']:.0f}%</div>
+   <div class="muted" style="font-size:12px">{cov_note}</div></div>
 </div>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:14px">
- <div><b>What the indicators say</b>{notes_html}</div>
- <div><b>How to trade this condition</b><div class="reason"><span>🧭</span><span>{ax['playbook']}</span></div></div>
-</div>
-<div class="note">ADX below 20 = sideways (direction ignored) · 20–25 = weak trend · 25+ = strong trend. The direction comes from
-+DI (buying pressure) vs −DI (selling pressure). ADX rises in strong up-trends <i>and</i> strong down-trends, so it never
-tells direction on its own. Chart: bottom panel, white = ADX, green = +DI, red = −DI.</div></div>""", unsafe_allow_html=True)
-        st.write("")
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px">
+ <div><b>1 · Model fit (in-sample)</b><div class="muted" style="margin-top:4px">R² {fc['r2']:.2f} = how neatly a straight
+   trend line fits the last {fc['lookback']} {bar_word}s. It says nothing about the future.</div></div>
+ <div><b>2 · Forecast accuracy (out-of-sample)</b><div class="muted" style="margin-top:4px">At {bt_m['n']} past dates the
+   model was fitted using only data up to that date and asked to predict {fc['horizon']} {bar_word}s ahead; results above
+   compare those predictions with what actually happened.</div></div>
+ <div><b>3 · Uncertainty (bands)</b><div class="muted" style="margin-top:4px">The 68%/95% bands are nominal ranges from
+   recent volatility, not guaranteed probabilities. Historically they contained the real price {bt_m['cov68']:.0f}% /
+   {bt_m['cov95']:.0f}% of the time ({cov_note}).</div></div>
+</div></div>""", unsafe_allow_html=True)
+                x_lab = [str(d.index[int(t_ + fc['horizon'])])[:10] for t_ in bt_df["t"]]
+                figb = go.Figure()
+                figb.add_trace(go.Scatter(x=x_lab, y=bt_df["hi95"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
+                figb.add_trace(go.Scatter(x=x_lab, y=bt_df["lo95"], fill="tonexty", fillcolor=rgba(P["accent"], .12),
+                                          line=dict(width=0), name="95% band (nominal)"))
+                figb.add_trace(go.Scatter(x=x_lab, y=bt_df["pred"], name="Forecast", mode="lines+markers",
+                                          line=dict(color=P["accent"], dash="dash"), marker=dict(size=4)))
+                figb.add_trace(go.Scatter(x=x_lab, y=bt_df["actual"], name="Actual", mode="lines+markers",
+                                          line=dict(color=P["text"]), marker=dict(size=4)))
+                figb.update_layout(template="plotly_dark", height=340, margin=dict(l=8, r=8, t=30, b=8),
+                                   paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                   title=dict(text=f"Forecast vs actual ({fc['horizon']} {bar_word}s ahead, out-of-sample)",
+                                              font=dict(size=13)),
+                                   legend=dict(orientation="h", y=1.12), hovermode="x unified",
+                                   font=dict(family="Inter, sans-serif", color=P["text"]))
+                figb.update_yaxes(gridcolor=P["grid"])
+                st.plotly_chart(figb, width="stretch", config={"displaylogo": False})
 
-        col1, col2, col3 = st.columns(3, gap="medium")
+                rows_tf = []
+                for k, lab, _, _ in ta_plus.TIMEFRAMES:
+                    if k not in tf_data or len(tf_data[k]) < fc["lookback"] + fc["horizon"] + 10:
+                        continue
+                    _, m_tf = ta_plus.walk_forward(tf_data[k]["Close"].values, fc["horizon"], fc["lookback"])
+                    if m_tf:
+                        rows_tf.append({"Timeframe": lab, "Tests": m_tf["n"], "Direction %": m_tf["dir_acc"],
+                                        "MAE %": m_tf["mape"], "Skill vs no-change %": m_tf["skill"],
+                                        "68% coverage": m_tf["cov68"], "95% coverage": m_tf["cov95"]})
+                if rows_tf:
+                    st.markdown(f"**Performance by timeframe** · {display_name(ticker)} · {fc['horizon']} bars ahead, "
+                                f"{fc['lookback']}-bar fit")
+                    pct = st.column_config.NumberColumn(format="%.0f%%")
+                    st.dataframe(pd.DataFrame(rows_tf), hide_index=True, width="stretch",
+                                 column_config={"Direction %": pct, "MAE %": st.column_config.NumberColumn(format="%.1f%%"),
+                                                "Skill vs no-change %": st.column_config.NumberColumn(format="%+.0f%%"),
+                                                "68% coverage": pct, "95% coverage": pct})
+                if st.button(f"Run the same test for every stock in my list ({len(universe)})"):
+                    with st.spinner("Back-testing…"):
+                        data_u = get_many(tuple(universe), interval, period)
+                        res_u = []
+                        for t_, dfu in data_u.items():
+                            if len(dfu) < fc["lookback"] + fc["horizon"] + 10:
+                                continue
+                            _, m_u = ta_plus.walk_forward(dfu["Close"].values, fc["horizon"], fc["lookback"])
+                            if m_u:
+                                res_u.append({"Name": display_name(t_), "Ticker": t_, "Tests": m_u["n"],
+                                              "Direction %": m_u["dir_acc"], "MAE %": m_u["mape"],
+                                              "Skill vs no-change %": m_u["skill"], "95% coverage": m_u["cov95"]})
+                        st.session_state["bt_universe"] = (tf_name, fc["horizon"], fc["lookback"], res_u)
+                if st.session_state.get("bt_universe"):
+                    tfn, hz, lb, res_u = st.session_state["bt_universe"]
+                    st.markdown(f"**Performance by stock** · {tfn} · {hz} bars ahead · {lb}-bar fit")
+                    st.dataframe(pd.DataFrame(res_u).sort_values("Direction %", ascending=False), hide_index=True,
+                                 width="stretch",
+                                 column_config={"Direction %": st.column_config.NumberColumn(format="%.0f%%"),
+                                                "MAE %": st.column_config.NumberColumn(format="%.1f%%"),
+                                                "Skill vs no-change %": st.column_config.NumberColumn(format="%+.0f%%"),
+                                                "95% coverage": st.column_config.NumberColumn(format="%.0f%%")})
+                st.markdown("<div class='note'>Method: walk-forward, out-of-sample. Each test origin uses only candles up to "
+                            "that date (no look-ahead), predicts the close N bars later, then moves forward by half the "
+                            "horizon. Skill > 0% means the trend line beat simply guessing 'no change'. A directional "
+                            "accuracy near 50% means the forecast has little predictive value for this stock.</div>",
+                            unsafe_allow_html=True)
 
-        # ---- Trade plan
-        rr1 = "–" if np.isnan(plan["rr1"]) else f"1 : {plan['rr1']:.1f}"
-        rr2 = "–" if np.isnan(plan["rr2"]) else f"1 : {plan['rr2']:.1f}"
-        e = plan["entry"]
-        col1.markdown(f"""
-<div class="card"><h3>Trade plan</h3>
-<div class="action">{plan['action']}</div>
-<table class="kv">
-<tr><td>Buy zone</td><td style="color:{P['up']}">{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}</td></tr>
-<tr><td>Reference entry</td><td>{e:.3f}</td></tr>
-<tr><td>Stop loss</td><td style="color:{P['warn']}">{plan['stop']:.3f} <span class="muted">({(plan['stop']/e-1)*100:.1f}%)</span></td></tr>
-<tr><td>Target 1 · sell half</td><td style="color:{P['down']}">{plan['t1']:.3f} <span class="muted">({(plan['t1']/e-1)*100:+.1f}%)</span></td></tr>
-<tr><td>Target 2</td><td style="color:{P['down']}">{plan['t2']:.3f} <span class="muted">({(plan['t2']/e-1)*100:+.1f}%)</span></td></tr>
-<tr><td>Risk : Reward</td><td>{rr1} &nbsp;/&nbsp; {rr2}</td></tr>
-</table>
-<div class="when">{re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", plan['when'])}</div></div>""", unsafe_allow_html=True)
-
-        # ---- Forecast
-        h = fc["horizon"]
-        unit_short = unit.split()[-1]
-        cross_up = first_cross(fc["centre"], plan["t1"], up=True)
-        cross_dn = first_cross(fc["centre"], sup[0][0], up=False)
-        if fc["direction"] == "Uptrend":
-            hint = (f"If this pace holds, price could reach resistance <b>{plan['t1']:.3f}</b> in about "
-                    f"<b>{cross_up} {unit_short}</b>, a likely area for sellers / taking profit."
-                    if cross_up else f"At this pace, price stays below resistance {plan['t1']:.3f} within {h} {unit_short}.")
-        elif fc["direction"] == "Downtrend":
-            hint = (f"If this pace holds, price could drop to support <b>{sup[0][0]:.3f}</b> in about "
-                    f"<b>{cross_dn} {unit_short}</b>. Watch there for a bounce (buy) or a break (more downside)."
-                    if cross_dn else f"At this pace, price stays above support {sup[0][0]:.3f} within {h} {unit_short}.")
-        else:
-            hint = (f"No reliable trend: price is moving sideways. Range traders buy near support "
-                    f"{sup[0][0]:.3f} and sell near resistance {plan['t1']:.3f}.")
-        col2.markdown(f"""
-<div class="card"><h3>Trend forecast · next {h} {unit_short}</h3>
-<div style="margin-bottom:10px">{pill(f"{fc['arrow']} {fc['direction']}", dir_col)} {pill(f"{fc['strength']} trend · R² {fc['r2']:.2f}", P['muted'])}</div>
-<table class="kv">
-<tr><td>Projected price</td><td>{fc['centre'][-1]:.3f} <span class="muted">({fc['total']:+.1f}%)</span></td></tr>
-<tr><td>Likely range (68%)</td><td>{fc['lo1'][-1]:.3f} – {fc['hi1'][-1]:.3f}</td></tr>
-<tr><td>Wide range (95%)</td><td>{fc['lo2'][-1]:.3f} – {fc['hi2'][-1]:.3f}</td></tr>
-<tr><td>Trend speed</td><td>{fc['per_bar']:+.2f}% per bar</td></tr>
-<tr><td>Momentum</td><td style="font-weight:500">{fc['momentum']}</td></tr>
-</table>
-<div style="margin-top:12px;font-size:14px;line-height:1.5">{hint}</div>
-<div class="note">How it works: a trend line is fitted to the last {fc['lookback']} bars and extended forward; the bands
-come from the stock's normal volatility. It shows where price goes <i>if the current trend continues</i>. News, results and
-market moves can break any trend, so treat it as a guide, not a prediction. R² near 1 = clean trend, near 0 = choppy.</div>
-</div>""", unsafe_allow_html=True)
-
-        # ---- Why + patterns
-        reasons = "".join(
-            f"<div class='reason'><b style='color:{P['up'] if pts > 0 else P['down']}'>{pts:+d}</b><span>{txt}</span></div>"
-            for pts, txt in sorted(why, key=lambda w: -abs(w[0])))
-        pats = learn.detect_patterns(d)
-        if pats:
-            prow = "".join(
-                f"<div class='reason'><span>{ {'bull': '🟢', 'bear': '🔴'}.get(k, '⚪') }</span>"
-                f"<span><b style='min-width:0;text-align:left'>{nm}</b> <span class='muted'>· "
-                f"{'latest candle' if ago == 0 else f'{ago} candle' + ('s' if ago > 1 else '') + ' ago'}</span></span></div>"
-                for nm, k, ago in pats)
-        else:
-            prow = "<div class='muted'>No clear pattern in the last 5 candles.</div>"
-        col3.markdown(f"""
-<div class="card"><h3>Why this signal</h3>{reasons}</div>
-<div class="card"><h3>Candlestick patterns · last 5 candles</h3>{prow}
-<div class="note">Meanings are in 🎓 Learn → Candlestick Patterns.</div></div>""", unsafe_allow_html=True)
-
-        with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
-            lv = pd.DataFrame(
-                [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
-                + [{"Type": "▶ Current price", "Level": price, "Touches": "", "Distance %": 0.0}]
-                + [{"Type": "Support", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in sup])
-            st.dataframe(lv, hide_index=True, width="stretch",
-                         column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
-                                        "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
-            if extra_rows:
-                st.markdown("**Extra levels**")
-                ex_df = pd.DataFrame(extra_rows).sort_values("Level", ascending=False)
-                st.dataframe(ex_df[["Method", "Role", "Level", "Distance %", "Note"]], hide_index=True,
-                             width="stretch",
+        # ================= Levels
+        with tabs[8]:
+            with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
+                lv = pd.DataFrame(
+                    [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
+                    + [{"Type": "▶ Current price", "Level": price, "Touches": "", "Distance %": 0.0}]
+                    + [{"Type": "Support", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in sup])
+                st.dataframe(lv, hide_index=True, width="stretch",
                              column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
                                             "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
+                if extra_rows:
+                    st.markdown("**Extra levels**")
+                    ex_df = pd.DataFrame(extra_rows).sort_values("Level", ascending=False)
+                    st.dataframe(ex_df[["Method", "Role", "Level", "Distance %", "Note"]], hide_index=True,
+                                 width="stretch",
+                                 column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
+                                                "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
+
+        # ================= Data
+        with tabs[9]:
+            st.markdown("#### 🧾 Data quality & source audit")
+            st.dataframe(pd.DataFrame([{"Check": k, "Value": str(v)} for k, v in dq.items()]), hide_index=True,
+                         width="stretch")
+            st.markdown("""<div class='note'>
+• <b>Source</b>: Yahoo Finance via the free <code>yfinance</code> library (no paid APIs). Bursa quotes are delayed about
+15 minutes; US quotes are near real-time in market hours.<br>
+• <b>Prices</b> are unadjusted for dividends (they match your broker's chart); Yahoo already adjusts for splits/bonus issues.<br>
+• <b>Cleaning</b>: duplicate timestamps, rows with missing/zero prices and rows with High &lt; Low are removed; missing
+volume is treated as 0.<br>
+• <b>Forming candle</b>: while the market is open the latest candle can still change. With “Signals on completed
+candles only” on, all indicators, patterns and signals use the last completed candle.<br>
+• <b>Indicators</b> are calculated locally and deterministically (EMA, Wilder RSI/ATR/ADX, MACD 12/26/9). Values
+that need more history than available are shown as N/A instead of being estimated.<br>
+• <b>4-Hour</b> candles are aggregated from real 1-hour candles (4 per block within each trading day).</div>""",
+                        unsafe_allow_html=True)
+
 
 # ---------------- Picks ----------------
 with tab_pk:
