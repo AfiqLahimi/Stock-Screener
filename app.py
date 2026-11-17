@@ -989,7 +989,7 @@ CHART_OVERLAYS = ["EMA 20/50/200", "Support/resistance & zones", "Breakout marke
 
 
 def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=None,
-               panels=tuple(CHART_PANELS), overlays=tuple(CHART_OVERLAYS)):
+               panels=tuple(CHART_PANELS), overlays=tuple(CHART_OVERLAYS), mobile=False):
     x = d.tail(show_bars)
     fmt = {"1d": "%d %b %y", "1wk": "%d %b %y", "1mo": "%b %Y"}.get(interval, "%d %b %H:%M")
     labels = [ts.strftime(fmt) for ts in x.index]
@@ -1125,7 +1125,9 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                                  showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
 
     fig.update_layout(
-        template="plotly_dark", height=560 + 115 * (rows - 1), margin=dict(l=8, r=96, t=36, b=8),
+        template="plotly_dark",
+        height=(380 + 90 * (rows - 1)) if mobile else (560 + 115 * (rows - 1)),
+        margin=dict(l=2, r=62, t=8, b=4) if mobile else dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=P["text"], size=12),
         xaxis_rangeslider_visible=False, hovermode="x unified",
@@ -1133,7 +1135,9 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
         legend=dict(orientation="h", y=1.05, x=0, font=dict(size=11, color=P["muted"]), bgcolor="rgba(0,0,0,0)"),
         bargap=0.25,
     )
-    fig.update_xaxes(type="category", nticks=8, showgrid=False, linecolor=P["border"], tickfont=dict(color=P["muted"]),
+    if mobile:
+        fig.update_layout(showlegend=False, font=dict(size=10))
+    fig.update_xaxes(type="category", nticks=4 if mobile else 8, tickangle=0, showgrid=False, linecolor=P["border"], tickfont=dict(color=P["muted"]),
                      showspikes=True, spikecolor=P["muted"], spikethickness=1, spikedash="dot")
     fig.update_yaxes(gridcolor=P["grid"], zeroline=False, linecolor=P["border"], tickfont=dict(color=P["muted"]))
     # focus the price axis on price action + key levels (a far-away EMA200 shouldn't squash the candles)
@@ -1182,6 +1186,14 @@ def tradingview_widget(symbol: str, height=800, interval="D"):
 # ----------------------------------------------------------------------------
 # UI
 # ----------------------------------------------------------------------------
+try:
+    _ua = st.context.headers.get("User-Agent", "") or ""
+except Exception:
+    _ua = ""
+AUTO_MOBILE = any(k in _ua for k in ("iPhone", "Android", "Mobile", "iPod"))
+MOBILE = bool(st.session_state.get("mobile", AUTO_MOBILE))
+st.session_state["_mobile"] = MOBILE
+
 st.markdown(f"""
 <style>
 .block-container{{padding-top:4.5rem;padding-bottom:3rem;max-width:1520px}}
@@ -1233,11 +1245,48 @@ a{{color:{P['accent']}}}
 .news .pill{{font-size:11px;padding:1px 8px}}
 .just{{margin-top:auto;padding-top:10px;font-size:13px;line-height:1.55;color:{P['text']};opacity:.82;
   border-top:1px dashed {P['border']};margin-top:10px}}
+@media (max-width: 768px) {{
+  html, body, [data-testid="stAppViewContainer"] {{font-size:15px}}
+  .block-container{{padding:3.4rem .7rem 4rem .7rem !important}}
+  .hero{{gap:10px;margin-bottom:2px}}
+  .hero .logo{{width:34px;height:34px;font-size:18px;border-radius:10px}}
+  .hero h1{{font-size:19px !important;line-height:1.2}}
+  .hero .sub{{display:none}}
+  .live{{padding:4px 9px;font-size:11px}}
+  /* top tabs: one scrollable row like a phone app */
+  .stTabs [data-baseweb="tab-list"]{{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;gap:2px}}
+  .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{{display:none}}
+  .stTabs [data-baseweb="tab"]{{padding:8px 11px;font-size:13.5px;white-space:nowrap;flex:0 0 auto}}
+  /* metric cards two per row */
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [data-testid="stMetric"]){{flex-wrap:wrap;gap:8px}}
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [data-testid="stMetric"]) > [data-testid="stColumn"]{{
+     flex:1 1 calc(50% - 8px) !important;min-width:calc(50% - 8px) !important;width:calc(50% - 8px) !important}}
+  [data-testid="stMetric"]{{padding:10px 12px;border-radius:12px}}
+  [data-testid="stMetricValue"]{{font-size:21px !important}}
+  /* any custom card grid becomes one column */
+  div[style*="grid-template-columns"]{{grid-template-columns:1fr !important}}
+  .card{{padding:14px 14px;border-radius:14px;margin-bottom:10px}}
+  .card h3{{font-size:15px}}
+  .head{{gap:10px 18px}}
+  .head .price{{font-size:30px}}
+  .head > div[style*="margin-left:auto"]{{margin-left:0 !important;width:100%}}
+  .kv td{{font-size:13.5px;padding:7px 0 !important}}
+  .kv td:last-child{{text-align:right}}
+  .note{{font-size:11.5px}}
+  .reason{{font-size:13.5px}}
+  .just{{font-size:12.5px}}
+  [data-testid="stSegmentedControl"] button, [data-testid="stButtonGroup"] button{{padding:4px 9px;font-size:13px}}
+  [data-testid="stButtonGroup"]{{overflow-x:auto;flex-wrap:nowrap}}
+  .modebar-container{{display:none !important}}
+}}
 .foot{{color:{P['muted']};font-size:12px;line-height:1.6;border-top:1px solid {P['border']};padding-top:14px;margin-top:26px}}
 </style>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
+    st.toggle("📱 Phone layout", value=AUTO_MOBILE, key="mobile",
+              help="Smaller charts, compact tables and fewer indicator panels for phone screens. "
+                   "Switches on automatically when the app is opened on a phone.")
     market = st.radio("Screener market", ["Bursa: all stocks", "Bursa: top 30 blue chips", "US", "My own list"],
                       index=0)
     custom = ""
@@ -1391,6 +1440,7 @@ with tab_scr:
         cc = st.column_config
         st.dataframe(
             view.drop(columns=["_label"]), hide_index=True, width="stretch",
+            column_order=(["Name", "Price", "Change %", "Signal", "Score"] if MOBILE else None),
             height=min(36 * (len(view) + 1) + 4, 900),
             column_config={
                 "Name": cc.TextColumn(width="small"),
@@ -1479,11 +1529,12 @@ with tab_an:
         show_fc = k1.toggle("Trend forecast", value=True)
         extra_sel = k2.multiselect("Extra support / resistance", EXTRA_OPTS, default=[],
                                    placeholder="Swings, touches, volume profile, Fibonacci…", key="extra_sel")
-        panels = k3.multiselect("Indicator panels", CHART_PANELS, default=CHART_PANELS, key="panels")
+        panels = k3.multiselect("Indicator panels", CHART_PANELS,
+                                default=["Volume", "RSI"] if MOBILE else CHART_PANELS, key="panels")
         overlays = k4.multiselect("Price overlays", CHART_OVERLAYS, default=CHART_OVERLAYS, key="overlays")
         extra, extra_rows = compute_extra_levels(d, extra_sel) if extra_sel else ({}, [])
         st.plotly_chart(make_chart(d, sup, res, plan, display_name(ticker), interval, fc if show_fc else None,
-                                   extra=extra, panels=panels, overlays=overlays),
+                                   extra=extra, panels=panels, overlays=overlays, mobile=MOBILE),
                         width="stretch", config={"displaylogo": False, "scrollZoom": True})
         legend_bits = []
         if "Support/resistance & zones" in overlays:
@@ -2332,7 +2383,7 @@ with tab_term:
 with tab_tv:
     tv_pick = st.session_state.get("an_ticker") or st.session_state.get("pick", "1155.KL")
     c1, c2 = st.columns([3, 1])
-    tv_h = c1.slider("Chart height (px)", 500, 1300, 850, 50)
+    tv_h = c1.slider("Chart height (px)", 400, 1300, 520 if MOBILE else 850, 50)
     tv_int = c2.selectbox("Interval", ["D", "W", "240", "60", "15"], index=0,
                           format_func=lambda v: {"D": "Daily", "W": "Weekly", "240": "4 hours",
                                                  "60": "1 hour", "15": "15 min"}[v])

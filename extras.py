@@ -713,7 +713,8 @@ def _heatmap_mine(universe, display_name, P, load_many, analyse, sector_map):
             textfont=dict(family="Inter, sans-serif", color="#ffffff", size=13),
             insidetextfont=dict(color="#ffffff"),
         ))
-        fig.update_layout(height=620, margin=dict(l=0, r=0, t=4, b=0), paper_bgcolor="rgba(0,0,0,0)",
+        fig.update_layout(height=470 if st.session_state.get("_mobile") else 620, margin=dict(l=0, r=0, t=4, b=0),
+                          paper_bgcolor="rgba(0,0,0,0)",
                           font=dict(family="Inter, sans-serif", color=P["text"]))
         st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
         st.caption(f"Green = up, red = down ({metric.lower()}). Box size = "

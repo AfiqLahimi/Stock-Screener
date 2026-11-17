@@ -135,7 +135,7 @@ def _select_cb(key, tickers):
     return cb
 
 
-def _chart(d, name, P, rgba, show_ema, interval_key):
+def _chart(d, name, P, rgba, show_ema, interval_key, mobile=False):
     x = d.copy()
     intraday = interval_key in ("1D", "5D", "1M")
     labels = [ts.strftime("%d %b %H:%M" if intraday else "%d %b %y") for ts in x.index]
@@ -156,12 +156,14 @@ def _chart(d, name, P, rgba, show_ema, interval_key):
     fig.add_hline(y=last, line=dict(color=lc, width=1, dash="dot"), row=1, col=1,
                   annotation_text=f" {_fmt_px(last)} ", annotation_position="right",
                   annotation_font=dict(color="#fff", size=11), annotation_bgcolor=lc)
-    fig.update_layout(template="plotly_dark", height=720, margin=dict(l=6, r=70, t=10, b=6),
+    fig.update_layout(template="plotly_dark", height=430 if mobile else 720,
+                      margin=dict(l=2, r=56, t=6, b=4) if mobile else dict(l=6, r=70, t=10, b=6),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
                       hovermode="x unified", showlegend=show_ema,
                       legend=dict(orientation="h", y=1.02, x=0, font=dict(size=11, color=P["muted"])),
                       font=dict(family="Inter, sans-serif", color=P["text"], size=12))
-    fig.update_xaxes(type="category", nticks=10, showgrid=False, tickfont=dict(color=P["muted"]))
+    fig.update_xaxes(type="category", nticks=4 if mobile else 10, tickangle=0, showgrid=False,
+                     tickfont=dict(color=P["muted"], size=10 if mobile else 12))
     fig.update_yaxes(gridcolor=P["grid"], side="right", tickfont=dict(color=P["muted"]))
     fig.update_yaxes(title_text="Vol", row=2, col=1, title_font=dict(color=P["muted"], size=10))
     return fig
@@ -179,7 +181,14 @@ def render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget
     quotes = load_quotes(all_t)
     sym = st.session_state["term_sym"]
 
-    left, right = st.columns([2.35, 1.45], gap="small")
+    mobile = bool(st.session_state.get("_mobile"))
+    if mobile:
+        left = st.container()
+        details_box = st.container()
+        right = st.container()
+    else:
+        left, right = st.columns([2.35, 1.45], gap="small")
+        details_box = right
 
     # ===================== RIGHT: watchlist + details
     with right:
@@ -239,7 +248,8 @@ def render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget
             except Exception:
                 d = pd.DataFrame()
         if engine == "TradingView":
-            tradingview_widget(tv_symbol(sym) if not sym.startswith("^") else sym.replace("^", ""), height=760,
+            tradingview_widget(tv_symbol(sym) if not sym.startswith("^") else sym.replace("^", ""),
+                               height=520 if mobile else 760,
                                interval="D")
             st.caption("TradingView widget. Some Bursa symbols may not be available in embedded charts: switch "
                        "to Built-in if it says so.")
@@ -260,13 +270,13 @@ def render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget
                 f"<span style='color:{cc}'>{ch:+.3f} ({pc:+.2f}%)</span> &nbsp; "
                 f"<span class='muted'>Vol</span> <span style='color:{cc}'>{_big(lr['Volume'])}</span></div>",
                 unsafe_allow_html=True)
-            st.plotly_chart(_chart(d, name_of(sym), P, rgba, show_ema, rng_key), width="stretch",
+            st.plotly_chart(_chart(d, name_of(sym), P, rgba, show_ema, rng_key, mobile), width="stretch",
                             config={"displaylogo": False, "scrollZoom": True})
             st.caption(f"Last candle {d.index[-1].strftime('%d %b %Y %H:%M')} · {len(d)} candles · Yahoo Finance"
                        + (" (Bursa ~15 min delayed)" if sym.endswith(".KL") or sym == "^KLSE" else ""))
 
     # ===================== RIGHT (continued): details of open symbol
-    with right:
+    with details_box:
         info = load_info(sym)
         q = quotes.loc[sym] if sym in quotes.index else None
         if q is None or pd.isna(q["last"]):
