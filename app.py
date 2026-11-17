@@ -18,6 +18,7 @@ import extras
 import learn
 import picks
 import ta_plus
+import terminal
 
 st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈", layout="wide")
 
@@ -1319,8 +1320,8 @@ elif market == "US":
 else:
     universe = tuple(dict.fromkeys(t for t in (normalise(s) for s in custom.split(",")) if t))
 
-tab_scr, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
-    ["🔎  Screener", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
+tab_scr, tab_term, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
+    ["🔎  Screener", "🖥️  Terminal", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
      "📺  TradingView", "🎓  Learn"])
 prices = {}
 
@@ -1416,7 +1417,7 @@ with tab_an:
     opts = list(universe) if universe else ["1155.KL"]
     c1, c2, c3, c4 = st.columns([2.2, 1.4, 1, 1])
     pick = c1.selectbox("Stock", opts, format_func=lambda t: f"{display_name(t)}  ·  {t}", key="pick")
-    typed = c2.text_input("Or type a ticker", placeholder="e.g. GAMUDA, 5398, NVDA")
+    typed = c2.text_input("Or type a ticker", placeholder="e.g. GAMUDA, 5398, NVDA", key="an_typed")
     horizon = c3.selectbox("Forecast ahead", [5, 10, 20, 30], index=1,
                            format_func=lambda v: f"{v} {unit.split()[-1]}")
     lookback = c4.selectbox("Trend based on", [30, 60, 120], index=1, format_func=lambda v: f"last {v} bars")
@@ -2321,6 +2322,11 @@ with tab_div:
 # ---------------- IPO ----------------
 with tab_ipo:
     extras.render_ipo(P, pill)
+
+# ---------------- Terminal ----------------
+with tab_term:
+    terminal.render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget, ta_plus.market_open,
+                    universe)
 
 # ---------------- TradingView ----------------
 with tab_tv:

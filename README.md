@@ -3,6 +3,7 @@
 Live stock screener for **Bursa Malaysia** and **US** stocks, built with Streamlit.
 
 - **Screener**: Buy/Sell signals with a score from −100 to +100, plus support, resistance and risk:reward
+- **Terminal**: TradingView-style layout with a big chart on the left, a clickable watchlist (indices, stocks, futures & FX) and full details of the open stock on the right
 - **Picks**: short-term (days to weeks) and long-term (6 months+) buy/sell ideas, ranked
 - **Heatmap**: market heatmap by sector, coloured by daily, weekly, monthly or 3-month change, or signal score
 - **Analysis & Forecast**: chart with switchable panels (volume, RSI, MACD, ADX), plus sections for a written summary, signal audit, trade plan with ATR stops, position sizing and Bursa fees, paper-trading journal, multi-timeframe analysis (15m–Monthly), candlestick context, confirmation and history, walk-forward forecast accuracy, levels, and a data-quality report
