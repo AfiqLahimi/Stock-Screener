@@ -137,12 +137,14 @@ def load_range(sym: str, iv: str, per: str) -> pd.DataFrame:
 # ============================================================================
 # Chart
 # ============================================================================
-OVERLAYS = ["EMA 9", "EMA 20", "EMA 50", "EMA 100", "EMA 200", "SMA 50", "SMA 200", "Bollinger (20, 2)",
-            "VWAP (intraday)", "Support / resistance"]
+OVERLAYS = ["EMA 9", "EMA 20", "EMA 50", "EMA 100", "EMA 200", "SMA 20", "SMA 50", "SMA 100", "SMA 200",
+            "Bollinger (20, 2)", "Keltner (20, 2)", "VWAP (intraday)", "VWAP (20-bar)", "Fibonacci",
+            "Support / resistance"]
 DEFAULT_OVERLAYS = ["EMA 9", "EMA 20", "EMA 50", "EMA 200"]
-PANES = ["Volume", "RSI", "MACD", "ADX / DMI", "Stochastic"]
+PANES = ["Volume", "RSI", "MACD", "ADX / DMI", "Stochastic", "Stoch RSI", "CCI", "ROC", "MFI", "OBV",
+         "A/D line", "Volatility (HV)"]
 OV_COL = {"EMA 9": "#e88ad1", "EMA 20": "ema20", "EMA 50": "ema50", "EMA 100": "#7fd1c7", "EMA 200": "ema200",
-          "SMA 50": "#c9c9c9", "SMA 200": "#e3a34b"}
+          "SMA 20": "#9fb3c8", "SMA 50": "#c9c9c9", "SMA 100": "#a3d977", "SMA 200": "#e3a34b"}
 DRAW_TOOLS = ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"]
 
 
@@ -157,8 +159,9 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
     labels = [ts.strftime("%d %b %H:%M" if intraday else "%d %b %y") for ts in x.index]
     panes = [p for p in PANES if p in panes]
     rows = 1 + len(panes)
-    sub_h = 0.17 if rows > 1 else 0
-    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.025,
+    sub_h = min(0.17, 0.62 / (rows - 1)) if rows > 1 else 0
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
+                        vertical_spacing=min(0.025, 0.18 / max(rows - 1, 1)),
                         row_heights=[1 - sub_h * (rows - 1)] + [sub_h] * (rows - 1))
     c = x["Close"]
     if ctype == "Line":
@@ -183,7 +186,22 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
                                          fill="tonexty", fillcolor=rgba(P["accent"], .06), hoverinfo="skip"), 1, 1)
                 fig.add_trace(go.Scatter(x=labels, y=mid, name="BB mid", line=dict(color=rgba(P["accent"], .5), width=1,
                                                                                     dash="dot"), hoverinfo="skip"), 1, 1)
-        elif k.startswith("VWAP") and intraday and d["Volume"].sum() > 0:
+        elif k.startswith("Keltner") and "ATR" in x:
+            mid, up_, lo_k = ind.keltner(c, x["ATR"])
+            for y_, nm in ((up_, "KC upper"), (lo_k, "KC lower")):
+                fig.add_trace(go.Scatter(x=labels, y=y_, name=nm, line=dict(color=rgba(P["warn"], .6), width=1, dash="dash"),
+                                         hoverinfo="skip"), 1, 1)
+        elif k == "VWAP (20-bar)" and d["Volume"].sum() > 0:
+            fig.add_trace(go.Scatter(x=labels, y=ind.rolling_vwap(d), name="VWAP 20",
+                                     line=dict(color=P["warn"], width=1.3)), 1, 1)
+        elif k == "Fibonacci":
+            fb = ind.fibonacci(d)
+            if fb:
+                for lab_, lv in list(fb["retracements"].items()) + list(fb["extensions"].items())[:2]:
+                    fig.add_hline(y=lv, line=dict(color=rgba(P["accent"], .45), width=1, dash="dot"), row=1, col=1,
+                                  annotation_text=f"Fib {lab_} {lv:,.3f}", annotation_position="left",
+                                  annotation_font=dict(color=P["accent"], size=9))
+        elif k.startswith("VWAP (intraday)") and intraday and d["Volume"].sum() > 0:
             fig.add_trace(go.Scatter(x=labels, y=ind.session_vwap(d), name="VWAP",
                                      line=dict(color=P["warn"], width=1.4, dash="dash")), 1, 1)
     if "Support / resistance" in overlays and levels:
@@ -239,6 +257,23 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
             for lv in (20, 80):
                 fig.add_hline(y=lv, line=dict(color=P["muted"], width=1, dash="dot"), row=i, col=1)
             fig.update_yaxes(range=[0, 100], row=i, col=1)
+        elif p == "Stoch RSI":
+            k_, d_ = ind.stoch_rsi(x["RSI"])
+            fig.add_trace(go.Scatter(x=labels, y=k_, name="StochRSI %K", showlegend=False,
+                                     line=dict(color=P["accent"], width=1.2)), i, 1)
+            fig.add_trace(go.Scatter(x=labels, y=d_, name="StochRSI %D", showlegend=False,
+                                     line=dict(color=P["warn"], width=1.2)), i, 1)
+            for lv in (20, 80):
+                fig.add_hline(y=lv, line=dict(color=P["muted"], width=1, dash="dot"), row=i, col=1)
+            fig.update_yaxes(range=[0, 100], row=i, col=1)
+        elif p in ("CCI", "ROC", "MFI", "OBV", "A/D line", "Volatility (HV)"):
+            y_ = {"CCI": lambda: ind.cci(x["High"], x["Low"], x["Close"]), "ROC": lambda: ind.roc(x["Close"]),
+                  "MFI": lambda: ind.mfi(x), "OBV": lambda: ind.obv(x), "A/D line": lambda: ind.ad_line(x),
+                  "Volatility (HV)": lambda: ind.hist_vol(x["Close"])}[p]()
+            fig.add_trace(go.Scatter(x=labels, y=y_, name=p, showlegend=False, line=dict(color=P["accent"], width=1.3)),
+                          i, 1)
+            for lv in {"CCI": (-100, 100), "ROC": (0,), "MFI": (20, 80)}.get(p, ()):
+                fig.add_hline(y=lv, line=dict(color=P["muted"], width=1, dash="dot"), row=i, col=1)
         fig.update_yaxes(title_text=p.split()[0], title_font=dict(color=P["muted"], size=10), row=i, col=1)
     fig.update_layout(template="plotly_dark", height=height + 95 * len(panes),
                       margin=dict(l=2, r=56, t=6, b=4) if mobile else dict(l=6, r=70, t=8, b=6),

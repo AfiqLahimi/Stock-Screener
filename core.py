@@ -310,22 +310,40 @@ def _fetch_bursa_all() -> pd.DataFrame:
 # ----------------------------------------------------------------------------
 # Technical analysis
 # ----------------------------------------------------------------------------
+def _wilder(s: pd.Series, n: int) -> pd.Series:
+    """Wilder's smoothing as in his original RSI/ATR/ADX: the first value is the simple average of the first n
+    valid inputs, then avg = (prev * (n - 1) + x) / n. Values before that are NaN (warm-up), never estimated."""
+    v = s.values.astype(float)
+    out = np.full(len(v), np.nan)
+    idx = np.flatnonzero(~np.isnan(v))
+    if len(idx) < n:
+        return pd.Series(out, index=s.index)
+    start = idx[n - 1]
+    out[start] = np.nanmean(v[idx[0]:start + 1])
+    for i in range(start + 1, len(v)):
+        x = v[i]
+        out[i] = out[i - 1] if np.isnan(x) else (out[i - 1] * (n - 1) + x) / n
+    return pd.Series(out, index=s.index)
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     c = d["Close"]
     for n in (20, 50, 200):
         d[f"EMA{n}"] = c.ewm(span=n, adjust=False).mean()
     delta = c.diff()
-    gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+    gain = _wilder(delta.clip(lower=0), 14)
+    loss = _wilder(-delta.clip(upper=0), 14)
     rs = gain / loss.replace(0, np.nan)
-    d["RSI"] = (100 - 100 / (1 + rs)).fillna(50)
+    rsi = 100 - 100 / (1 + rs)
+    d["RSI"] = rsi.where(~(loss == 0) | gain.isna(), 100.0)      # no losses at all = 100; warm-up stays NaN
     ema12, ema26 = c.ewm(span=12, adjust=False).mean(), c.ewm(span=26, adjust=False).mean()
     d["MACD"] = ema12 - ema26
     d["MACDsig"] = d["MACD"].ewm(span=9, adjust=False).mean()
     d["MACDhist"] = d["MACD"] - d["MACDsig"]
     tr = pd.concat([d["High"] - d["Low"], (d["High"] - c.shift()).abs(), (d["Low"] - c.shift()).abs()], axis=1).max(axis=1)
-    d["ATR"] = tr.ewm(alpha=1 / 14, adjust=False).mean()
+    tr.iloc[0] = np.nan                                              # no previous close on the first bar
+    d["ATR"] = _wilder(tr, 14)
     d["VolAvg"] = d["Volume"].rolling(20).mean()
     d["VolAvg20"] = d["Volume"].shift(1).rolling(20).mean()          # average of the previous 20 bars
     d["RVOL"] = (d["Volume"] / d["VolAvg20"]).replace([np.inf, -np.inf], np.nan)
@@ -335,12 +353,14 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     down_move = -d["Low"].diff()
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    a = 1 / 14
-    atr_w = tr.ewm(alpha=a, adjust=False).mean()
-    d["PDI"] = 100 * pd.Series(plus_dm, index=d.index).ewm(alpha=a, adjust=False).mean() / atr_w.replace(0, np.nan)
-    d["MDI"] = 100 * pd.Series(minus_dm, index=d.index).ewm(alpha=a, adjust=False).mean() / atr_w.replace(0, np.nan)
+    pdm = pd.Series(plus_dm, index=d.index)
+    mdm = pd.Series(minus_dm, index=d.index)
+    pdm.iloc[0] = mdm.iloc[0] = np.nan
+    atr_w = d["ATR"]
+    d["PDI"] = 100 * _wilder(pdm, 14) / atr_w.replace(0, np.nan)
+    d["MDI"] = 100 * _wilder(mdm, 14) / atr_w.replace(0, np.nan)
     dx = 100 * (d["PDI"] - d["MDI"]).abs() / (d["PDI"] + d["MDI"]).replace(0, np.nan)
-    d["ADX"] = dx.ewm(alpha=a, adjust=False).mean()
+    d["ADX"] = _wilder(dx, 14)
     d["HH20"] = d["High"].shift(1).rolling(20).max()                 # prior 20-bar high / low (breakout levels)
     d["LL20"] = d["Low"].shift(1).rolling(20).min()
     return d

@@ -20,7 +20,9 @@ DEFAULT_WATCH = ["1155.KL", "5347.KL", "5398.KL", "1023.KL", "AAPL", "NVDA", "TS
 def _snapshot():
     return {"watchlist": list(st.session_state.get("term_stocks", [])),
             "favourites": sorted(set(st.session_state.get("term_fav", []))),
-            "screens": dict(st.session_state.get("scr_saved", {}))}
+            "screens": dict(st.session_state.get("scr_saved", {})),
+            "weights": {k: v for k, v in st.session_state.items() if isinstance(k, str) and k.startswith("w_")
+                        and k != "w_reset" and isinstance(v, (int, float))}}
 
 
 def _apply(data):
@@ -28,6 +30,9 @@ def _apply(data):
     st.session_state["term_stocks"] = wl or DEFAULT_WATCH.copy()
     st.session_state["term_fav"] = [t for t in data.get("favourites", []) if isinstance(t, str)]
     st.session_state["scr_saved"] = data.get("screens", {}) if isinstance(data.get("screens"), dict) else {}
+    for k, v in (data.get("weights") or {}).items():
+        if isinstance(k, str) and k.startswith("w_") and isinstance(v, (int, float)):
+            st.session_state[k] = int(v)
     st.session_state["_prefs_saved"] = json.dumps(_snapshot())
 
 

@@ -1,7 +1,10 @@
 """Analysis & Forecast page: full single-stock analysis."""
 from core import *  # noqa: F401,F403
+import engine
+import learn
 import ta_plus
 import ui
+from views import analysis_plus as AP
 
 
 def render(C):
@@ -121,8 +124,12 @@ def render(C):
         bt_df, bt_m = ta_plus.walk_forward(d["Close"].values, fc["horizon"], fc["lookback"])
 
         F = score_factors(d, sup, res)
-        tabs = st.tabs(["🧠 Summary", "🧮 Audit", "📋 Trade plan", "⏱️ Timeframes", "📊 Volume", "📐 ADX",
-                        "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
+        tech = engine.assess(d, sup, res, mtf=mtf, patterns=learn.detect_patterns(d, 3), weights=AP.tech_weights())
+        hz = engine.horizons(tech["x"])
+        ops = engine.opportunities(tech["x"], sup, res, tech)
+        AP.inject()
+        tabs = st.tabs(["🧠 Summary", "🧭 Scorecard", "📐 Indicators", "🏦 Fundamentals", "🧮 Audit", "📋 Trade plan",
+                        "⏱️ Timeframes", "📊 Volume", "📈 ADX", "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
 
         # ================= Summary
         with tabs[0]:
@@ -319,7 +326,15 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                         f"{cards}</div>", unsafe_allow_html=True)
 
         # ================= Signal audit
+        # ================= Scorecard / Indicators / Fundamentals (Phase 5)
         with tabs[1]:
+            AP.render_scorecard(ticker, tech, plan, sup, res, hz, ops, price, MOBILE)
+        with tabs[2]:
+            AP.render_indicators(ticker, display_name(ticker), d, tech, interval, MOBILE)
+        with tabs[3]:
+            AP.render_fundamentals(ticker, price, MOBILE)
+
+        with tabs[4]:
             F = score_factors(d, sup, res)
             total = sum(f["Points"] for f in F)
             st.markdown(f"""
@@ -372,7 +387,7 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                         "different events and are reported separately.</div>", unsafe_allow_html=True)
 
         # ================= Trade plan & sizing
-        with tabs[2]:
+        with tabs[5]:
             st.markdown("##### ⚙️ Your trade settings")
             s1c, s2c, s3c, s4c = st.columns(4)
             capital = s1c.number_input(f"Trading capital ({cur})", min_value=100.0, value=10000.0, step=500.0,
@@ -501,7 +516,7 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                 st.caption("Paper trading only: this app never places real orders.")
 
         # ================= Multi-timeframe
-        with tabs[3]:
+        with tabs[6]:
             lab_of = {k: lab for k, lab, _, _ in ta_plus.TIMEFRAMES}
             avail = [k for k, _, _, _ in ta_plus.TIMEFRAMES if tf_rows.get(k, {}).get("available")]
             missing = [f"{lab_of[k]} ({tf_rows[k].get('reason', 'n/a')})" for k, _, _, _ in ta_plus.TIMEFRAMES
@@ -542,7 +557,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                         "candles (Yahoo has no 4H feed).</div>", unsafe_allow_html=True)
 
         # ================= Volume
-        with tabs[4]:
+        with tabs[7]:
             # ---- Volume analysis card
             if va is None:
                 st.info("Not enough volume data for a volume analysis.")
@@ -600,7 +615,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
     traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
 
         # ================= ADX
-        with tabs[5]:
+        with tabs[8]:
             if not ax:
                 st.info("Not enough candles for ADX (needs about 30).")
             # ---- ADX card
@@ -658,7 +673,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
             st.write("")
 
         # ================= Patterns
-        with tabs[6]:
+        with tabs[9]:
             st.markdown("<div class='note'>Patterns in the last 5 candles. Each is checked against the trend before "
                         "it and nearby support/resistance; reversal patterns in the wrong place are marked low "
                         "reliability rather than turned into signals.</div>", unsafe_allow_html=True)
@@ -701,7 +716,8 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                         unsafe_allow_html=True)
 
         # ================= Forecast & accuracy
-        with tabs[7]:
+        with tabs[10]:
+            AP.render_horizons(hz, ops, tech['x'])
             # ---- Forecast
             h = fc["horizon"]
             unit_short = unit.split()[-1]
@@ -826,7 +842,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                             unsafe_allow_html=True)
 
         # ================= Levels
-        with tabs[8]:
+        with tabs[11]:
             with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
                 lv = pd.DataFrame(
                     [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
@@ -844,7 +860,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                                                 "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
 
         # ================= Data
-        with tabs[9]:
+        with tabs[12]:
             st.markdown("#### 🧾 Data quality & source audit")
             st.dataframe(pd.DataFrame([{"Check": k, "Value": str(v)} for k, v in dq.items()]), hide_index=True,
                          width="stretch")

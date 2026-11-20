@@ -20,7 +20,7 @@ _KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_(filter|c_[a-
                    r"|term_(add|search|rng|ema|engine|cat|filter|layout|h|ov|pn|type)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"
-                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng)|sb_[a-z]+)$")
+                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng)|sb_[a-z]+|w_(t_[a-z_]+|f_[a-z_]+|combo)|ai_(ov|pn)|fu_hist)$")
 
 
 def detect_mobile():
@@ -114,7 +114,7 @@ def panel(title, sub=None, key=None):
     k = key or re.sub(r"\W+", "_", title.lower()).strip("_")
     with st.container(border=True, key=f"pnl_{k}"):
         sub_html = f"<span class='sub'>{sub}</span>" if sub else ""
-        st.markdown(f"<div class='panel-h'><h2>{title}</h2>{sub_html}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='panel-h'><div class='ph-t'>{title}</div>{sub_html}</div>", unsafe_allow_html=True)
         yield
 
 
@@ -202,8 +202,8 @@ html, body, [data-testid="stAppViewContainer"]{{font-variant-numeric:tabular-num
   padding:11px 15px 14px !important;gap:.55rem !important;overflow:hidden}}
 .panel-h{{display:flex;align-items:baseline;gap:10px;margin:-11px -15px 4px;padding:10px 15px 9px;
   border-bottom:1px solid {border};background:{card2}}}
-.panel-h h2{{font-size:11.5px !important;text-transform:uppercase;letter-spacing:.12em;color:{text};margin:0 !important;
-  padding:0 !important;font-weight:700 !important;line-height:1.3 !important}}
+.panel-h .ph-t{{font-size:11.5px;text-transform:uppercase;letter-spacing:.12em;color:{text};font-weight:700;
+  line-height:1.3}}
 .panel-h .sub{{font-size:11px;color:{muted};margin-left:auto;text-align:right}}
 [class*="st-key-pnl_"] .card{{background:transparent;border:none;padding:0;margin:0}}
 [class*="st-key-pnl_"] [data-testid="stMetric"]{{background:{bg}}}
