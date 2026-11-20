@@ -18,7 +18,7 @@ import prefs  # noqa: E402
 import ui  # noqa: E402
 from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, display_name, load_bursa_all,  # noqa: E402
                   load_shariah, normalise)
-from views import analysis, dashboard, others, screener  # noqa: E402
+from views import analysis, calendar_view, compare, dashboard, macro, others, risk, screener  # noqa: E402
 
 ui.keep_state()
 prefs.load()
@@ -42,6 +42,10 @@ PAGES = {
     "screener": _page(screener.render, "Screener", "🔎", "screener"),
     "analysis": _page(analysis.render, "Analysis & Forecast", "📊", "analysis"),
     "picks": _page(others.picks_page, "Picks", "🎯", "picks"),
+    "compare": _page(compare.render, "Compare", "⚖️", "compare"),
+    "risk": _page(risk.render, "Risk", "🛡️", "risk"),
+    "calendar": _page(calendar_view.render, "Calendar", "📅", "calendar"),
+    "macro": _page(macro.render, "Macro", "🌐", "macro"),
     "terminal": _page(others.terminal_page, "Terminal", "🖥️", "terminal"),
     "multichart": _page(others.multichart_page, "Multi-Chart", "🧩", "multi-chart"),
     "paper": _page(others.paper_page, "Paper Trade", "💼", "paper-trade"),
@@ -52,12 +56,12 @@ PAGES = {
     "learn": _page(others.learn_page, "Learn", "🎓", "learn"),
 }
 nav = st.navigation({
-    "Markets": [PAGES[k] for k in ("dashboard", "heatmap")],
-    "Research": [PAGES[k] for k in ("screener", "analysis", "picks")],
-    "Trade": [PAGES[k] for k in ("terminal", "multichart", "paper", "tradingview")],
-    "Income & events": [PAGES[k] for k in ("dividends", "ipo")],
+    "Markets": [PAGES[k] for k in ("dashboard", "macro", "heatmap")],
+    "Research": [PAGES[k] for k in ("screener", "analysis", "compare", "picks")],
+    "Trade": [PAGES[k] for k in ("terminal", "multichart", "paper", "risk", "tradingview")],
+    "Income & events": [PAGES[k] for k in ("calendar", "dividends", "ipo")],
     "Learn": [PAGES["learn"]],
-}, position="sidebar")
+}, position="sidebar", expanded=True)
 _go = st.session_state.pop("_goto", None)
 if _go in PAGES and PAGES[_go].url_path != nav.url_path:
     st.switch_page(PAGES[_go])
