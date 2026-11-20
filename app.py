@@ -14,12 +14,14 @@ import streamlit as st
 
 st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈", layout="wide")
 
+import prefs  # noqa: E402
 import ui  # noqa: E402
 from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, display_name, load_bursa_all,  # noqa: E402
                   load_shariah, normalise)
 from views import analysis, dashboard, others, screener  # noqa: E402
 
 ui.keep_state()
+prefs.load()
 AUTO_MOBILE = ui.detect_mobile()
 MOBILE = bool(st.session_state.get("mobile", AUTO_MOBILE))
 st.session_state["_mobile"] = MOBILE
@@ -182,6 +184,8 @@ nav.run()
 st.markdown("<div class='foot'>⚠️ Generated automatically from technical indicators. Not investment advice. "
             "Support/resistance, zones and forecasts are reference levels, not guarantees. Always use a stop loss and "
             "never invest money you can't afford to lose.</div>", unsafe_allow_html=True)
+
+prefs.sync()
 
 if auto:
     time.sleep(every)

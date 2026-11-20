@@ -48,8 +48,7 @@ def multichart_page(C):
 
 
 def terminal_page(C):
-    terminal.render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget, ta_plus.market_open,
-                    C.universe)
+    terminal.render(C)
 
 
 def tradingview_page(C):

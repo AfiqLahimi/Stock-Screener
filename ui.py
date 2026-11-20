@@ -17,7 +17,7 @@ import re
 # Widget values that should survive switching pages. Only plain input widgets are listed: buttons, uploaders and
 # table selections are read-only in Streamlit and must never be re-assigned.
 _KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_filter|ts_[a-z]+"
-                   r"|term_(add|search|rng|ema|engine)|mc_(\d|tf|layout|panels|n|slot)"
+                   r"|term_(add|search|rng|ema|engine|cat|filter|layout|h|ov|pn|type)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"
                    r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng))$")
@@ -188,7 +188,7 @@ CSS = """
 <style>
 html, body, [data-testid="stAppViewContainer"]{{font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}}
 .mono, .idx .v, .idx .c, [data-testid="stMetricValue"], [data-testid="stMetricDelta"], .head .price, .head .chg,
-.kv td:last-child, .pl b, .tk .mono{{font-family:SF Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-variant-numeric:tabular-nums}}
+.pl b, .tk .mono{{font-family:SF Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-variant-numeric:tabular-nums}}
 /* ---------- ticker tape */
 .tape{{overflow:hidden;white-space:nowrap;border:1px solid {border};border-radius:10px;background:{card};
   margin:-4px 0 14px;user-select:none;mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}}
