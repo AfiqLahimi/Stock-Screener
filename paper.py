@@ -370,7 +370,15 @@ def _reset_cb():
     save_account(new_account(st.session_state.get("pt_smyr", 10000.0), st.session_state.get("pt_susd", 2000.0)))
     st.session_state["pt_confirm"] = False
     st.session_state["pt_flash"] = "New paper account created."
-def render(display_name, normalise, P, pill, all_symbols, analyse, trade_plan):
+def _use_plan(ticker, plan):
+    lot = lot_of(ticker)
+    st.session_state["pt_prefill"] = {"ticker": ticker, "entry": round_price(plan["entry"], ticker),
+                                      "stop": round_price(plan["stop"], ticker), "t1": round_price(plan["t1"], ticker),
+                                      "qty": st.session_state.get("pt_lots", 1) * lot if lot == 100
+                                      else st.session_state.get("pt_shares", 10)}
+
+
+def render(display_name, normalise, P, pill, all_symbols, stock_panel):
     acct = load_account()
     events = process(acct)
     pos_df, val = mark(acct)
@@ -424,7 +432,7 @@ def render(display_name, normalise, P, pill, all_symbols, analyse, trade_plan):
                 st.session_state["pt_lots" if pre["ticker"].endswith(".KL") else "pt_shares"] = \
                     max(int(pre["qty"]) // (100 if pre["ticker"].endswith(".KL") else 1), 1)
             st.session_state["pt_other"] = ""
-            st.info("Order ticket filled from the Analysis trade plan. Check it and press Place order.")
+            st.info("Order ticket filled from the trade plan (limit buy at entry, stop loss, target 1). Check it and press Place order.")
         opts = all_symbols()
         if st.session_state.get("pt_symbol") and st.session_state["pt_symbol"] not in opts:
             opts = [st.session_state["pt_symbol"]] + opts
@@ -443,6 +451,8 @@ def render(display_name, normalise, P, pill, all_symbols, analyse, trade_plan):
                     f" &nbsp;·&nbsp; you hold <b>{held:,}</b> shares &nbsp;·&nbsp; "
                     f"{'market open' if ta_plus.market_open(ticker) else 'market closed'}</div>",
                     unsafe_allow_html=True)
+        with st.expander(f"📈 Chart & analysis: {display_name(ticker)}", expanded=True):
+            stock_panel(ticker, "ptc", use_plan_cb=_use_plan)
         d1, d2, d3 = st.columns(3)
         side = d1.segmented_control("Side", ["BUY", "SELL"], default="BUY", key="pt_side") or "BUY"
         otype = d2.segmented_control("Order type", ["MARKET", "LIMIT", "STOP"], default="MARKET",

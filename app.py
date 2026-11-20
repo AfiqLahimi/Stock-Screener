@@ -990,7 +990,7 @@ CHART_OVERLAYS = ["EMA 20/50/200", "Support/resistance & zones", "Breakout marke
 
 
 def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=None,
-               panels=tuple(CHART_PANELS), overlays=tuple(CHART_OVERLAYS), mobile=False):
+               panels=tuple(CHART_PANELS), overlays=tuple(CHART_OVERLAYS), mobile=False, height=None):
     x = d.tail(show_bars)
     fmt = {"1d": "%d %b %y", "1wk": "%d %b %y", "1mo": "%b %Y"}.get(interval, "%d %b %H:%M")
     labels = [ts.strftime(fmt) for ts in x.index]
@@ -1127,7 +1127,7 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
 
     fig.update_layout(
         template="plotly_dark",
-        height=(380 + 90 * (rows - 1)) if mobile else (560 + 115 * (rows - 1)),
+        height=height or ((380 + 90 * (rows - 1)) if mobile else (560 + 115 * (rows - 1))),
         margin=dict(l=2, r=62, t=8, b=4) if mobile else dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=P["text"], size=12),
@@ -1404,8 +1404,83 @@ elif market == "US":
 else:
     universe = tuple(dict.fromkeys(t for t in (normalise(s) for s in custom.split(",")) if t))
 
-tab_scr, tab_term, tab_pt, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
-    ["🔎  Screener", "🖥️  Terminal", "💼  Paper Trade", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
+# ----------------------------------------------------------------------------
+# Compact chart + analysis (used by Paper Trade and Multi-Chart)
+# ----------------------------------------------------------------------------
+MC_TF = {"1D": ("1d", "2y", 120, "days"), "1W": ("1wk", "10y", 104, "weeks"),
+         "4H": ("4h", "730d", 120, "4-hour bars"), "1H": ("1h", "6mo", 120, "hours")}
+
+
+def stock_view(ticker, tf="1D"):
+    iv, per, bars, unit = MC_TF[tf]
+    try:
+        df = load_one(ticker, iv, per)
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty or len(df) < 60:
+        return None
+    d, sup, res, sc, label, why = analyse(df)
+    plan = trade_plan(d, sup, res, label, unit)
+    chg = (float(d["Close"].iloc[-1]) / float(d["Close"].iloc[-2]) - 1) * 100
+    return {"d": d, "sup": sup, "res": res, "sc": sc, "label": label, "why": why, "plan": plan, "iv": iv,
+            "bars": bars, "ax": adx_analysis(d), "chg": chg, "price": float(d["Close"].iloc[-1])}
+
+
+def render_stock_panel(ticker, key, use_plan_cb=None):
+    """Chart of one stock with a short analysis box next to it (stacked on phones)."""
+    t1, t2 = st.columns([1, 1.6])
+    tf = t1.segmented_control("Chart timeframe", list(MC_TF), default="1D", key=f"{key}_tf") or "1D"
+    panels = t2.multiselect("Panels", CHART_PANELS, default=["Volume", "RSI"], key=f"{key}_panels")
+    v = stock_view(ticker, tf)
+    if v is None:
+        st.info(f"Chart: N/A. Not enough price data for {display_name(ticker)} on this timeframe.")
+        return None
+    fig = make_chart(v["d"], v["sup"], v["res"], v["plan"], display_name(ticker), v["iv"], show_bars=v["bars"],
+                     panels=panels, mobile=MOBILE, height=(330 if MOBILE else 430) + 90 * len(panels))
+    plan, d = v["plan"], v["d"]
+    last = d.iloc[-1]
+    risk = plan["entry"] - plan["stop"]
+    rr = f"{plan['rr1']:.1f}" if np.isfinite(plan["rr1"]) else "N/A"
+    pros = [t for p_, t in sorted(v["why"], key=lambda w: -w[0]) if p_ > 0][:3]
+    cons = [t for p_, t in sorted(v["why"], key=lambda w: w[0]) if p_ < 0][:3]
+    ax = v["ax"]
+    box = f"""<div class="card">
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">{pill(v['label'], LABEL_COLOR[v['label']])}
+<span style="font-weight:600">Score {v['sc']:+d}</span>
+{pill(f"{ax['regime']} · ADX {ax['adx']:.0f}", regime_color(ax['regime'])) if ax else pill("ADX N/A", P['muted'])}
+<span class="muted">RSI {last['RSI']:.0f}</span></div>
+<div style="margin:10px 0 6px;font-weight:600">{plan['action']}</div>
+<table style="width:100%;font-size:13px">
+<tr><td class="muted">Buy zone</td><td style="text-align:right">{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}</td></tr>
+<tr><td class="muted">Entry</td><td style="text-align:right">{plan['entry']:.3f}</td></tr>
+<tr><td class="muted">Stop loss</td><td style="text-align:right;color:{P['down']}">{plan['stop']:.3f}
+ <span class="muted">({-risk / plan['entry'] * 100 if plan['entry'] else 0:.1f}%)</span></td></tr>
+<tr><td class="muted">Target 1 / 2</td><td style="text-align:right;color:{P['up']}">{plan['t1']:.3f} / {plan['t2']:.3f}</td></tr>
+<tr><td class="muted">Reward : risk (T1)</td><td style="text-align:right">{rr}</td></tr>
+<tr><td class="muted">Support / resistance</td><td style="text-align:right">{plan['s1']:.3f} / {plan['t1']:.3f}</td></tr>
+</table>
+<div style="margin-top:8px;font-size:12.5px">{''.join(f"<div style='color:{P['up']}'>＋ {t}</div>" for t in pros)}
+{''.join(f"<div style='color:{P['down']}'>－ {t}</div>" for t in cons)}</div>
+<div class="muted" style="font-size:11.5px;margin-top:6px">{tf} candles · last {d.index[-1].strftime('%d %b %Y %H:%M')}.
+Technical read only, not advice.</div></div>"""
+    if MOBILE:
+        st.plotly_chart(fig, width="stretch", config={"displaylogo": False}, key=f"{key}_fig")
+        st.markdown(box, unsafe_allow_html=True)
+    else:
+        cc1, cc2 = st.columns([2.3, 1])
+        cc1.plotly_chart(fig, width="stretch", config={"displaylogo": False, "scrollZoom": True}, key=f"{key}_fig")
+        cc2.markdown(box, unsafe_allow_html=True)
+    b1, b2 = st.columns(2)
+    if use_plan_cb and plan["entry"] > plan["stop"]:
+        b1.button("📋 Use this plan in the order ticket", key=f"{key}_use", width="stretch",
+                  on_click=use_plan_cb, args=(ticker, plan))
+    b2.button("📊 Open full analysis", key=f"{key}_full", width="stretch",
+              on_click=lambda: st.session_state.update(an_typed=ticker))
+    return v
+
+
+tab_scr, tab_term, tab_mc, tab_pt, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
+    ["🔎  Screener", "🖥️  Terminal", "🧩  Multi-Chart", "💼  Paper Trade", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
      "📺  TradingView", "🎓  Learn"])
 prices = {}
 
@@ -2378,7 +2453,13 @@ with tab_ipo:
 
 # ---------------- Paper trading ----------------
 with tab_pt:
-    paper.render(display_name, normalise, P, pill, all_symbols, analyse, trade_plan)
+    paper.render(display_name, normalise, P, pill, all_symbols, render_stock_panel)
+
+# ---------------- Multi-chart ----------------
+with tab_mc:
+    import multichart
+    multichart.render(display_name, normalise, P, pill, all_symbols, universe, stock_view, make_chart,
+                      LABEL_COLOR, CHART_PANELS, MC_TF, MOBILE)
 
 # ---------------- Terminal ----------------
 with tab_term:
