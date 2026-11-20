@@ -280,7 +280,7 @@ def render_dividends(universe, prices, display_name, P, pill):
         fig = go.Figure(go.Bar(x=[str(y) for y in yearly.index], y=yearly.values, marker_color=colors,
                                text=[f"{v:.3f}" for v in yearly.values], textposition="outside",
                                textfont=dict(color=P["muted"], size=11)))
-        fig.update_layout(template="plotly_dark", height=330, margin=dict(l=8, r=8, t=40, b=8),
+        fig.update_layout(height=330, margin=dict(l=8, r=8, t=40, b=8),
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                           title=dict(text=f"Dividend per share by year ({cur})", font=dict(size=14, color=P["text"])),
                           font=dict(family="Inter, sans-serif", color=P["text"]), showlegend=False)
@@ -700,7 +700,7 @@ def _heatmap_mine(universe, display_name, P, load_many, analyse, sector_map):
         fmt = (lambda v: f"{v:+.0f}") if metric == "Signal score" else (lambda v: f"{v:+.2f}%")
         text = [f"{fmt(v)}" for v in sec["metric"]] + \
                [f"{fmt(v) if pd.notna(v) else '–'}<br>{p:,.3f}" for v, p in zip(h["metric"], h["price"])]
-        scale = [[0, P["down"]], [0.5, "#2b3242"], [1, P["up"]]]
+        scale = [[0, P["down"]], [0.5, P["heat_mid"]], [1, P["up"]]]
         fig = go.Figure(go.Treemap(
             ids=ids, labels=labels, parents=parents, values=values, branchvalues="total",
             text=text, texttemplate="<b>%{label}</b><br>%{text}", textposition="middle center",

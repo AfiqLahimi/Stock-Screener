@@ -6,8 +6,8 @@ from streamlit.testing.v1 import AppTest
 
 import core
 
-PAGES = ["dashboard", "macro", "heatmap", "screener", "analysis", "compare", "picks", "terminal", "multichart",
-         "paper", "risk", "tradingview", "calendar", "dividends", "ipo", "learn"]
+PAGES = ["dashboard", "macro", "commodities", "heatmap", "screener", "analysis", "compare", "picks", "notes", "portfolio",
+         "risk", "terminal", "multichart", "paper", "tradingview", "calendar", "dividends", "ipo", "learn"]
 APP = core.__file__.replace("core.py", "app.py")
 
 
@@ -67,6 +67,10 @@ def test_pages_with_awkward_data(awkward):
     at.sidebar.text_area(key="sb_custom").set_value("9998.KL, 9997.KL, 1155.KL, ^KLSE, NVDA")
     at.run()
     at.session_state["term_stocks"] = ["9998.KL", "9997.KL", "1155.KL", "MYR=X"]
+    at.session_state["pf_lots"] = [{"ticker": t, "qty": 100.0, "cost": 1.0, "date": "2025-01-02", "note": ""}
+                                   for t in ("9998.KL", "9997.KL", "NVDA")]
+    at.session_state["rk_src"] = "My portfolio"
+    at.session_state["notes"] = {"9998.KL": [{"date": "2026-01-01 10:00", "tag": "Risk", "text": "suspended"}]}
     bad = {}
     for p in PAGES:
         at.session_state["_goto"] = p

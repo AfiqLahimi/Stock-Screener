@@ -626,11 +626,24 @@ def future_labels(d, n, interval):
 # ----------------------------------------------------------------------------
 # Theme (soft dark, easy on the eyes)
 # ----------------------------------------------------------------------------
-P = dict(
+DARK_P = dict(
     bg="#10151f", card="#171d29", card2="#1c2331", border="#262f40", text="#dfe3ea",
     muted="#8890a2", up="#3fb68b", down="#e0646a", accent="#7b93f5", warn="#e3a34b",
-    grid="#1f2737", ema20="#e3c46a", ema50="#6fa8ef", ema200="#b48ae0",
+    grid="#1f2737", ema20="#e3c46a", ema50="#6fa8ef", ema200="#b48ae0", heat_mid="#2b3242", on_fill="#ffffff",
 )
+LIGHT_P = dict(
+    bg="#f5f6f8", card="#ffffff", card2="#eef1f5", border="#dde2ea", text="#1c2230",
+    muted="#667085", up="#16955f", down="#d0414e", accent="#4f6be8", warn="#b97a12",
+    grid="#e7eaf0", ema20="#c29a12", ema50="#2f74d0", ema200="#8650c2", heat_mid="#e4e8ee", on_fill="#ffffff",
+)
+P = dict(DARK_P)
+
+
+def apply_theme(kind):
+    """Switch the shared palette in place (every module holds this same dict) to the viewer's theme."""
+    P.clear()
+    P.update(LIGHT_P if kind == "light" else DARK_P)
+    return P
 LABEL_COLOR = {"STRONG BUY": "#3fb68b", "BUY": "#62c49e", "NEUTRAL": "#8890a2",
                "SELL": "#e88a8e", "STRONG SELL": "#e0646a"}
 LABEL_DOT = {"STRONG BUY": "🟢", "BUY": "🟢", "NEUTRAL": "⚪", "SELL": "🔴", "STRONG SELL": "🔴"}
@@ -640,6 +653,13 @@ def rgba(hex_color, a):
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{a})"
+
+
+def mix(c1, c2, t):
+    """Blend two hex colours: t = 0 gives c1, t = 1 gives c2."""
+    a, b = c1.lstrip("#"), c2.lstrip("#")
+    rgb = [round(int(a[i:i + 2], 16) * (1 - t) + int(b[i:i + 2], 16) * t) for i in (0, 2, 4)]
+    return "#" + "".join(f"{v:02x}" for v in rgb)
 
 
 def pill(text, color):
@@ -804,7 +824,8 @@ def adx_regime(adx, pdi, mdi):
 
 def regime_color(regime):
     k = REGIME_COLOR_KEY.get(regime, "muted")
-    return {"up": P["up"], "down": P["down"], "up_soft": "#7fcfae", "down_soft": "#e9989c"}.get(k, P["muted"])
+    return {"up": P["up"], "down": P["down"], "up_soft": mix(P["up"], P["text"], 0.3),
+            "down_soft": mix(P["down"], P["text"], 0.3)}.get(k, P["muted"])
 
 
 def adx_analysis(d: pd.DataFrame, bar_word="day"):
@@ -1154,7 +1175,7 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                                  showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
 
     fig.update_layout(
-        template="plotly_dark",
+        
         height=height or ((380 + 90 * (rows - 1)) if mobile else (560 + 115 * (rows - 1))),
         margin=dict(l=2, r=62, t=8, b=4) if mobile else dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",

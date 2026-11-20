@@ -20,7 +20,7 @@ _KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_(filter|c_[a-
                    r"|term_(add|search|rng|ema|engine|cat|filter|layout|h|ov|pn|type)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"
-                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng)|sb_[a-z]+|cmp_(syms|rng)|rk_src|cal_(b30|mon)|mac_fred|w_(t_[a-z_]+|f_[a-z_]+|combo)|ai_(ov|pn)|fu_hist)$")
+                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng)|sb_[a-z]+|cmp_(syms|rng)|rk_src|cal_(b30|mon)|mac_fred|fin_(kind|per|all|row)|dcf_[a-z0-9]+|note_tag|nt_(q|tags)|cm_(sel|grp|rng)|w_(t_[a-z_]+|f_[a-z_]+|combo)|ai_(ov|pn)|fu_hist)$")
 
 
 def detect_mobile():
@@ -70,8 +70,8 @@ def topbar(title, icon):
 </div>""", unsafe_allow_html=True)
 
 
-PHONE_ORDER = ("dashboard", "screener", "analysis", "terminal", "multichart", "paper", "risk", "compare", "calendar",
-               "macro", "picks", "heatmap", "dividends", "ipo", "tradingview", "learn")
+PHONE_ORDER = ("dashboard", "portfolio", "screener", "analysis", "terminal", "multichart", "paper", "risk", "compare",
+               "calendar", "macro", "commodities", "notes", "picks", "heatmap", "dividends", "ipo", "tradingview", "learn")
 
 
 def phone_nav(pages, current):

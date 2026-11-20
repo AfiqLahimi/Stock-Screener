@@ -322,7 +322,7 @@ def index_chart(d, name, rng, mob):
         if k in x and x[k].notna().any():
             fig.add_trace(go.Scatter(x=labels, y=x[k], name=k, line=dict(color=col, width=1.3),
                                      hovertemplate=f"{k} %{{y:,.2f}}<extra></extra>"))
-    fig.update_layout(template="plotly_dark", height=300 if mob else 360, margin=dict(l=4, r=4, t=6, b=4),
+    fig.update_layout(height=300 if mob else 360, margin=dict(l=4, r=4, t=6, b=4),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
                       showlegend=not mob, legend=dict(orientation="h", y=1.02, x=0, font=dict(size=11)),
                       hovermode="x unified", font=dict(family="Inter, sans-serif", color=P["text"], size=11))
@@ -385,7 +385,7 @@ def sector_chart(liq, mob):
                            marker_color=[P["up"] if v >= 0 else P["down"] for v in g["chg"]],
                            text=[f"{v:+.2f}%" for v in g["chg"]], textposition="outside", cliponaxis=False,
                            hovertemplate="%{y}: %{x:+.2f}%<extra></extra>"))
-    fig.update_layout(template="plotly_dark", height=max(260, 26 * len(g) + 40), margin=dict(l=4, r=40, t=4, b=4),
+    fig.update_layout(height=max(260, 26 * len(g) + 40), margin=dict(l=4, r=40, t=4, b=4),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                       font=dict(family="Inter, sans-serif", color=P["text"], size=11))
     lo, hi = float(min(g["chg"].min(), 0)), float(max(g["chg"].max(), 0))

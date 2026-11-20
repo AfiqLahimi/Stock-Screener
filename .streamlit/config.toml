@@ -1,5 +1,13 @@
 [theme]
 base = "dark"
+font = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+codeFont = "SF Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+baseFontSize = 14
+baseRadius = "0.5rem"
+showWidgetBorder = true
+
+# Dark (default look of the app)
+[theme.dark]
 primaryColor = "#7b93f5"
 backgroundColor = "#10151f"
 secondaryBackgroundColor = "#171d29"
@@ -7,20 +15,31 @@ textColor = "#dfe3ea"
 borderColor = "#262f40"
 dataframeBorderColor = "#232b3b"
 dataframeHeaderBackgroundColor = "#1c2331"
-font = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
-codeFont = "SF Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-baseFontSize = 14
-baseRadius = "0.5rem"
-showWidgetBorder = true
 greenColor = "#3fb68b"
 redColor = "#e0646a"
 
-[theme.sidebar]
+[theme.dark.sidebar]
 backgroundColor = "#171d29"
 secondaryBackgroundColor = "#1c2331"
 
+# Light (pick it in the ⋮ menu → Settings → Theme)
+[theme.light]
+primaryColor = "#4f6be8"
+backgroundColor = "#f5f6f8"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1c2230"
+borderColor = "#dde2ea"
+dataframeBorderColor = "#e3e7ee"
+dataframeHeaderBackgroundColor = "#eef1f5"
+greenColor = "#16955f"
+redColor = "#d0414e"
+
+[theme.light.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eef1f5"
+
 [client]
-toolbarMode = "minimal"
+toolbarMode = "viewer"
 
 [browser]
 gatherUsageStats = false

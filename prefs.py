@@ -1,4 +1,5 @@
-"""Small user preferences that should survive closing the browser: watchlist, favourites and saved screens.
+"""User data that should survive closing the browser: watchlist, favourites, saved screens, scoring weights,
+research notes and the manually entered portfolio.
 
 Saved on the app server (data/prefs.json) and mirrored to this browser's local storage, so they come back
 after the server restarts (Streamlit Cloud wipes server files on restart/redeploy)."""
@@ -21,6 +22,8 @@ def _snapshot():
     return {"watchlist": list(st.session_state.get("term_stocks", [])),
             "favourites": sorted(set(st.session_state.get("term_fav", []))),
             "screens": dict(st.session_state.get("scr_saved", {})),
+            "notes": dict(st.session_state.get("notes", {})),
+            "portfolio": list(st.session_state.get("pf_lots", [])),
             "weights": {k: v for k, v in st.session_state.items() if isinstance(k, str) and k.startswith("w_")
                         and k != "w_reset" and isinstance(v, (int, float))}}
 
@@ -30,6 +33,8 @@ def _apply(data):
     st.session_state["term_stocks"] = wl or DEFAULT_WATCH.copy()
     st.session_state["term_fav"] = [t for t in data.get("favourites", []) if isinstance(t, str)]
     st.session_state["scr_saved"] = data.get("screens", {}) if isinstance(data.get("screens"), dict) else {}
+    st.session_state["notes"] = data.get("notes", {}) if isinstance(data.get("notes"), dict) else {}
+    st.session_state["pf_lots"] = [x for x in data.get("portfolio", []) if isinstance(x, dict)]
     for k, v in (data.get("weights") or {}).items():
         if isinstance(k, str) and k.startswith("w_") and isinstance(v, (int, float)):
             st.session_state[k] = int(v)
@@ -47,6 +52,8 @@ def load():
     except Exception:
         st.session_state.setdefault("term_stocks", DEFAULT_WATCH.copy())
         st.session_state.setdefault("term_fav", [])
+        st.session_state.setdefault("notes", {})
+        st.session_state.setdefault("pf_lots", [])
         st.session_state["_prefs_saved"] = json.dumps(_snapshot())
         st.session_state["_prefs_from_disk"] = False
 

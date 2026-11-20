@@ -16,10 +16,16 @@ st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈"
 
 import prefs  # noqa: E402
 import ui  # noqa: E402
-from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, display_name, load_bursa_all,  # noqa: E402
-                  load_shariah, normalise)
-from views import analysis, calendar_view, compare, dashboard, macro, others, risk, screener  # noqa: E402
+from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, apply_theme, display_name,  # noqa: E402
+                  load_bursa_all, load_shariah, normalise)
+from views import (analysis, calendar_view, commodities, compare, dashboard, macro, notes_page, others,  # noqa: E402
+                   portfolio, risk, screener)
 
+try:
+    _theme = st.context.theme.type or "dark"
+except Exception:
+    _theme = "dark"
+apply_theme(_theme)
 ui.keep_state()
 prefs.load()
 AUTO_MOBILE = ui.detect_mobile()
@@ -45,6 +51,9 @@ PAGES = {
     "picks": _page(others.picks_page, "Picks", "🎯", "picks"),
     "compare": _page(compare.render, "Compare", "⚖️", "compare"),
     "risk": _page(risk.render, "Risk", "🛡️", "risk"),
+    "portfolio": _page(portfolio.render, "My Portfolio", "📁", "portfolio"),
+    "notes": _page(notes_page.render, "Notes", "📝", "notes"),
+    "commodities": _page(commodities.render, "Commodities", "🛢️", "commodities"),
     "calendar": _page(calendar_view.render, "Calendar", "📅", "calendar"),
     "macro": _page(macro.render, "Macro", "🌐", "macro"),
     "terminal": _page(others.terminal_page, "Terminal", "🖥️", "terminal"),
@@ -57,9 +66,9 @@ PAGES = {
     "learn": _page(others.learn_page, "Learn", "🎓", "learn"),
 }
 nav = st.navigation({
-    "Markets": [PAGES[k] for k in ("dashboard", "macro", "heatmap")],
-    "Research": [PAGES[k] for k in ("screener", "analysis", "compare", "picks")],
-    "Trade": [PAGES[k] for k in ("terminal", "multichart", "paper", "risk", "tradingview")],
+    "Markets": [PAGES[k] for k in ("dashboard", "macro", "commodities", "heatmap")],
+    "Research": [PAGES[k] for k in ("screener", "analysis", "compare", "picks", "notes")],
+    "Portfolio & trade": [PAGES[k] for k in ("portfolio", "risk", "terminal", "multichart", "paper", "tradingview")],
     "Income & events": [PAGES[k] for k in ("calendar", "dividends", "ipo")],
     "Learn": [PAGES["learn"]],
 }, position="sidebar", expanded=True)

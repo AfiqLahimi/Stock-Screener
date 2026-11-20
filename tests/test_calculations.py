@@ -8,6 +8,7 @@ import engine
 import fundamentals as F
 import indicators as ind
 import research as R
+import stockinfo as SI
 
 
 @pytest.fixture(scope="module")
@@ -104,3 +105,22 @@ def test_fundamentals_bank_and_missing_data():
     assert r["is_financial"] and r["scores"]["Financial health"] is None
     empty = F.analyse({"info": {}, "income": None, "balance": None, "cashflow": None, "dividends": None}, None)
     assert F.overall(empty) is None and empty["completeness"] == 0
+
+
+def test_dcf_closed_form():
+    # 100 a year forever at 10% = 1,000; net debt is subtracted; r <= g is rejected
+    assert SI.dcf(100, 0, 0, 0.10, 0.0, 0, 1)["per_share"] == pytest.approx(1000.0)
+    assert SI.dcf(100, 0, 0, 0.10, 0.0, 500, 1)["per_share"] == pytest.approx(500.0)
+    assert SI.dcf(100, 0, 0, 0.03, 0.03, 0, 1) is None
+
+
+def test_portfolio_math(monkeypatch):
+    import streamlit as st
+    from views import portfolio as PF
+    st.session_state.clear() if hasattr(st.session_state, "clear") else None
+    tbl, _ = PF.holdings_table([{"ticker": "1155.KL", "qty": 100.0, "cost": 1.0, "date": "2025-01-02", "note": ""},
+                                {"ticker": "1155.KL", "qty": 300.0, "cost": 3.0, "date": "2025-02-02", "note": ""}])
+    r = tbl.iloc[0]
+    assert r["Qty"] == 400 and r["Avg cost"] == pytest.approx(2.5)
+    assert r["P/L (RM)"] == pytest.approx(400 * (r["Last"] - 2.5))
+    assert r["Weight %"] == pytest.approx(100.0)

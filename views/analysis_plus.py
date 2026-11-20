@@ -266,7 +266,7 @@ def render_fundamentals(ticker, price, mobile):
             fig = go.Figure(go.Bar(x=[f"FY{ts:%Y}" for ts in s.index], y=s.values,
                                    marker_color=[P["up"] if v >= 0 else P["down"] for v in s.values],
                                    text=[F._big(v) if sel != "EPS" else f"{v:.3f}" for v in s.values], textposition="outside"))
-            fig.update_layout(template="plotly_dark", height=280, margin=dict(l=4, r=4, t=10, b=4),
+            fig.update_layout(height=280, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               font=dict(color=P["text"], size=11))
             fig.update_yaxes(gridcolor=P["grid"])
@@ -279,7 +279,7 @@ def render_fundamentals(ticker, price, mobile):
         with ui.panel("Dividend history", "per share, by calendar year (full years)"):
             fig = go.Figure(go.Bar(x=[str(y) for y in da.index[-12:]], y=da.values[-12:], marker_color=P["accent"],
                                    text=[f"{v:.3f}" for v in da.values[-12:]], textposition="outside"))
-            fig.update_layout(template="plotly_dark", height=240, margin=dict(l=4, r=4, t=10, b=4),
+            fig.update_layout(height=240, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               font=dict(color=P["text"], size=11))
             fig.update_yaxes(gridcolor=P["grid"])

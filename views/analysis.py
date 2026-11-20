@@ -5,6 +5,7 @@ import learn
 import ta_plus
 import ui
 from views import analysis_plus as AP
+from views import research_tabs as RT
 
 
 def render(C):
@@ -133,7 +134,8 @@ def render(C):
             st.warning(f"The extended technical engine couldn't run on this data ({type(e).__name__}); the classic "
                        "analysis is still shown.")
         AP.inject()
-        tabs = st.tabs(["🧠 Summary", "🧭 Scorecard", "📐 Indicators", "🏦 Fundamentals", "🧮 Audit", "📋 Trade plan",
+        tabs = st.tabs(["🧠 Summary", "🧭 Scorecard", "📐 Indicators", "🏦 Fundamentals", "📰 News & analysts",
+                        "🧾 Financials", "💎 Valuation", "🏛️ Ownership", "📝 Notes", "🧮 Audit", "📋 Trade plan",
                         "⏱️ Timeframes", "📊 Volume", "📈 ADX", "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
 
         # ================= Summary
@@ -345,7 +347,18 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
         with tabs[3], ui.guard("The fundamentals"):
             AP.render_fundamentals(ticker, price, MOBILE)
 
-        with tabs[4]:
+        with tabs[4], ui.guard("News & analysts"):
+            RT.render_news_analysts(ticker, price, MOBILE)
+        with tabs[5], ui.guard("Financials"):
+            RT.render_financials(ticker, C, MOBILE)
+        with tabs[6], ui.guard("The valuation"):
+            RT.render_valuation(ticker, price, MOBILE)
+        with tabs[7], ui.guard("Ownership"):
+            RT.render_ownership(ticker, MOBILE)
+        with tabs[8], ui.guard("Notes"):
+            RT.render_notes(ticker, MOBILE)
+
+        with tabs[9]:
             F = score_factors(d, sup, res)
             total = sum(f["Points"] for f in F)
             st.markdown(f"""
@@ -398,7 +411,7 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                         "different events and are reported separately.</div>", unsafe_allow_html=True)
 
         # ================= Trade plan & sizing
-        with tabs[5]:
+        with tabs[10]:
             st.markdown("##### ⚙️ Your trade settings")
             s1c, s2c, s3c, s4c = st.columns(4)
             capital = s1c.number_input(f"Trading capital ({cur})", min_value=100.0, value=10000.0, step=500.0,
@@ -527,7 +540,7 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                 st.caption("Paper trading only: this app never places real orders.")
 
         # ================= Multi-timeframe
-        with tabs[6]:
+        with tabs[11]:
             lab_of = {k: lab for k, lab, _, _ in ta_plus.TIMEFRAMES}
             avail = [k for k, _, _, _ in ta_plus.TIMEFRAMES if tf_rows.get(k, {}).get("available")]
             missing = [f"{lab_of[k]} ({tf_rows[k].get('reason', 'n/a')})" for k, _, _, _ in ta_plus.TIMEFRAMES
@@ -568,7 +581,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                         "candles (Yahoo has no 4H feed).</div>", unsafe_allow_html=True)
 
         # ================= Volume
-        with tabs[7]:
+        with tabs[12]:
             # ---- Volume analysis card
             if va is None:
                 st.info("Not enough volume data for a volume analysis.")
@@ -626,7 +639,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
     traded on green candles than red (buyers in control).</div></div>""", unsafe_allow_html=True)
 
         # ================= ADX
-        with tabs[8]:
+        with tabs[13]:
             if not ax:
                 st.info("Not enough candles for ADX (needs about 30).")
             # ---- ADX card
@@ -684,7 +697,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
             st.write("")
 
         # ================= Patterns
-        with tabs[9]:
+        with tabs[14]:
             st.markdown("<div class='note'>Patterns in the last 5 candles. Each is checked against the trend before "
                         "it and nearby support/resistance; reversal patterns in the wrong place are marked low "
                         "reliability rather than turned into signals.</div>", unsafe_allow_html=True)
@@ -727,7 +740,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                         unsafe_allow_html=True)
 
         # ================= Forecast & accuracy
-        with tabs[10]:
+        with tabs[15]:
             if tech is not None:
                 with ui.guard("The horizon assessment"):
                     AP.render_horizons(hz, ops, tech['x'])
@@ -800,7 +813,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                                           line=dict(color=P["accent"], dash="dash"), marker=dict(size=4)))
                 figb.add_trace(go.Scatter(x=x_lab, y=bt_df["actual"], name="Actual", mode="lines+markers",
                                           line=dict(color=P["text"]), marker=dict(size=4)))
-                figb.update_layout(template="plotly_dark", height=340, margin=dict(l=8, r=8, t=30, b=8),
+                figb.update_layout(height=340, margin=dict(l=8, r=8, t=30, b=8),
                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                                    title=dict(text=f"Forecast vs actual ({fc['horizon']} {bar_word}s ahead, out-of-sample)",
                                               font=dict(size=13)),
@@ -855,7 +868,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                             unsafe_allow_html=True)
 
         # ================= Levels
-        with tabs[11]:
+        with tabs[16]:
             with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
                 lv = pd.DataFrame(
                     [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
@@ -873,7 +886,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                                                 "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
 
         # ================= Data
-        with tabs[12]:
+        with tabs[17]:
             st.markdown("#### 🧾 Data quality & source audit")
             st.dataframe(pd.DataFrame([{"Check": k, "Value": str(v)} for k, v in dq.items()]), hide_index=True,
                          width="stretch")

@@ -275,7 +275,7 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
             for lv in {"CCI": (-100, 100), "ROC": (0,), "MFI": (20, 80)}.get(p, ()):
                 fig.add_hline(y=lv, line=dict(color=P["muted"], width=1, dash="dot"), row=i, col=1)
         fig.update_yaxes(title_text=p.split()[0], title_font=dict(color=P["muted"], size=10), row=i, col=1)
-    fig.update_layout(template="plotly_dark", height=height + 95 * len(panes),
+    fig.update_layout(height=height + 95 * len(panes),
                       margin=dict(l=2, r=56, t=6, b=4) if mobile else dict(l=6, r=70, t=8, b=6),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
                       hovermode="x unified", dragmode="pan", showlegend=not mobile and bool(overlays),

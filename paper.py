@@ -596,7 +596,7 @@ def render(display_name, normalise, P, pill, all_symbols, stock_panel):
             fig = go.Figure()
             for c in used or ["MYR"]:
                 fig.add_trace(go.Scatter(x=eqd["date"], y=eqd[c], name=f"{c} equity", mode="lines+markers"))
-            fig.update_layout(template="plotly_dark", height=300, margin=dict(l=8, r=8, t=30, b=8),
+            fig.update_layout(height=300, margin=dict(l=8, r=8, t=30, b=8),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               title=dict(text="Account value (one point per day you open the app)", font=dict(size=13)),
                               legend=dict(orientation="h", y=1.15))

@@ -42,7 +42,8 @@ def _demo(ticker):
             "trailingPE": 14.2, "forwardPE": 12.8, "priceToBook": 1.9, "priceToSalesTrailing12Months": 1.6,
             "enterpriseToEbitda": 8.4, "returnOnEquity": 0.135, "returnOnAssets": 0.062, "grossMargins": gm,
             "operatingMargins": om, "profitMargins": nm, "debtToEquity": 27.0, "currentRatio": 1.6, "quickRatio": 1.1,
-            "dividendRate": 0.105, "trailingAnnualDividendYield": 0.034, "payoutRatio": 0.55, "currentPrice": 3.1, "marketCap": 9e9, "currency": "MYR",
+            "dividendRate": 0.105, "trailingAnnualDividendYield": 0.034, "payoutRatio": 0.55, "currentPrice": 3.1,
+            "sharesOutstanding": 2e9, "marketCap": 9e9, "currency": "MYR",
             "financialCurrency": "MYR", "mostRecentQuarter": None}
     return {"info": info, "income": inc, "balance": bal, "cashflow": cf, "dividends": divs}
 

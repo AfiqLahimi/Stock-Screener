@@ -133,8 +133,25 @@ def bnm_opr():
         return None
 
 
-FRED = {"CPIAUCSL": ("US inflation (CPI, yearly)", "yoy"), "UNRATE": ("US unemployment rate", "level"),
-        "FEDFUNDS": ("US Fed funds rate", "level"), "T10Y2Y": ("US 10y − 2y yield spread", "level")}
+FRED = {
+    # id: (name, transform, group, unit)  transform: level | yoy (% vs a year earlier) | diff (change vs previous)
+    "CPIAUCSL": ("Inflation (CPI)", "yoy", "Inflation", "%"),
+    "CPILFESL": ("Core inflation (CPI ex food & energy)", "yoy", "Inflation", "%"),
+    "PCEPILFE": ("Core PCE inflation (Fed's target gauge)", "yoy", "Inflation", "%"),
+    "UNRATE": ("Unemployment rate", "level", "Jobs", "%"),
+    "PAYEMS": ("Jobs added (non-farm payrolls)", "diff", "Jobs", "k"),
+    "ICSA": ("Weekly jobless claims", "level", "Jobs", "k"),
+    "A191RL1Q225SBEA": ("Real GDP growth (annualised, quarterly)", "level", "Growth", "%"),
+    "INDPRO": ("Industrial production", "yoy", "Growth", "%"),
+    "RSAFS": ("Retail sales", "yoy", "Growth", "%"),
+    "FEDFUNDS": ("Fed funds rate", "level", "Rates & credit", "%"),
+    "DGS2": ("2-year Treasury yield", "level", "Rates & credit", "%"),
+    "DGS10": ("10-year Treasury yield", "level", "Rates & credit", "%"),
+    "T10Y2Y": ("10y − 2y yield spread", "level", "Rates & credit", "%"),
+    "BAMLH0A0HYM2": ("High-yield credit spread", "level", "Rates & credit", "%"),
+    "UMCSENT": ("Consumer sentiment (U. Michigan)", "level", "Sentiment & money", ""),
+    "M2SL": ("Money supply (M2)", "yoy", "Sentiment & money", "%"),
+}
 
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
@@ -142,7 +159,9 @@ def fred(series_id):
     """A FRED series via its public CSV download (no key). Returns a Series or None."""
     if DEMO:
         idx = pd.date_range(end=pd.Timestamp.now().normalize(), periods=36, freq="MS")
-        base = {"CPIAUCSL": 310, "UNRATE": 4.2, "FEDFUNDS": 4.1, "T10Y2Y": 0.4}[series_id]
+        base = {"CPIAUCSL": 310, "CPILFESL": 320, "PCEPILFE": 125, "UNRATE": 4.2, "PAYEMS": 159000, "ICSA": 225,
+                "A191RL1Q225SBEA": 2.1, "INDPRO": 103, "RSAFS": 720000, "FEDFUNDS": 4.1, "DGS2": 3.9, "DGS10": 4.3,
+                "T10Y2Y": 0.4, "BAMLH0A0HYM2": 3.1, "UMCSENT": 68, "M2SL": 21700}.get(series_id, 100)
         rng = np.random.default_rng(len(series_id))
         vals = base * np.cumprod(1 + rng.normal(0.002 if series_id == "CPIAUCSL" else 0, 0.01, 36))
         return pd.Series(vals, index=idx)

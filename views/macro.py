@@ -110,30 +110,40 @@ def render(C):
         st.caption("Crude oil matters for Malaysia's O&G stocks and government revenue. Crude palm oil futures (FCPO) "
                    "are traded on Bursa but aren't available from Yahoo, so they're not shown.")
     # ---------------------------------------------------------------- US macro
-    with d, ui.panel("US economy", "FRED, monthly"):
-        rows = []
-        charts = {}
-        for sid, (name, kind) in R.FRED.items():
-            s = R.fred(sid)
-            if s is None or len(s) < 13:
-                rows.append(f"<tr><td>{name}</td><td class='muted'>N/A</td></tr>")
-                continue
-            if kind == "yoy":
-                s = (s / s.shift(12) - 1).dropna() * 100
-            last, prev = float(s.iloc[-1]), float(s.iloc[-2])
-            charts[name] = s.tail(36)
-            rows.append(f"<tr><td>{name}</td><td class='mono'>{last:.2f}% <span class='muted'>"
-                        f"({last - prev:+.2f} vs previous, {s.index[-1]:%b %Y})</span></td></tr>")
-        st.markdown("<table class='kv'>" + "".join(rows) + "</table>", unsafe_allow_html=True)
-        if charts:
-            pick = st.segmented_control("Chart", list(charts), default=list(charts)[0], key="mac_fred",
-                                        label_visibility="collapsed") or list(charts)[0]
-            s = charts[pick]
-            fig = go.Figure(go.Scatter(x=s.index, y=s.values, line=dict(color=P["accent"], width=2)))
-            fig.update_layout(template="plotly_dark", height=200, margin=dict(l=4, r=4, t=6, b=4),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              font=dict(color=P["text"], size=11))
-            fig.update_yaxes(gridcolor=P["grid"], ticksuffix="%")
-            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="mac_fred_chart")
-        st.caption("Malaysian CPI/GDP aren't available from a free keyless API here; see DOSM (link on the Calendar "
-                   "page).")
+    with d, ui.panel("US economy", "FRED (St. Louis Fed)"):
+        groups = list(dict.fromkeys(v[2] for v in R.FRED.values()))
+        tabs = st.tabs(groups)
+        for tab, grp in zip(tabs, groups):
+            with tab:
+                rows, charts = [], {}
+                for sid, (name, kind, g, unit) in R.FRED.items():
+                    if g != grp:
+                        continue
+                    s0 = R.fred(sid)
+                    if s0 is None or len(s0) < 14:
+                        rows.append(f"<tr><td>{name}</td><td class='muted'>N/A</td></tr>")
+                        continue
+                    if kind == "yoy":
+                        step = 12 if (s0.index[-1] - s0.index[-13]).days > 300 else 52
+                        s = (s0 / s0.shift(step) - 1).dropna() * 100
+                    elif kind == "diff":
+                        s = s0.diff().dropna()
+                    else:
+                        s = s0
+                    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+                    charts[name] = (s.tail(60), unit)
+                    val = f"{last:,.0f}k" if unit == "k" else f"{last:.2f}{unit}"
+                    rows.append(f"<tr><td>{name}</td><td class='mono'>{val} <span class='muted'>"
+                                f"({last - prev:+,.2f} · {s.index[-1]:%b %Y})</span></td></tr>")
+                st.markdown("<table class='kv'>" + "".join(rows) + "</table>", unsafe_allow_html=True)
+                if charts:
+                    pick = st.selectbox("Chart", list(charts), key=f"mac_fred_{grp}", label_visibility="collapsed")
+                    s, unit = charts[pick]
+                    fig = go.Figure(go.Scatter(x=s.index, y=s.values, line=dict(color=P["accent"], width=2)))
+                    fig.update_layout(height=200, margin=dict(l=4, r=4, t=6, b=4), paper_bgcolor="rgba(0,0,0,0)",
+                                      plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                    fig.update_yaxes(gridcolor=P["grid"], ticksuffix="%" if unit == "%" else "")
+                    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=f"mac_chart_{grp}")
+        st.caption("Inflation and growth figures are % change vs a year earlier unless stated. Malaysian CPI/GDP "
+                   "aren't available from a free keyless API here; see DOSM (link on the Calendar page). The full "
+                   "commodity board is on the 🛢️ Commodities page.")

@@ -14,7 +14,9 @@ CSV uploads, no paid APIs, no broker connection: everything is calculated in the
   Bursa sector performance, market news, your watchlist and six lists of technical set-ups. Click any row to
   open the stock.
 - **Macro**: market regime (trend × volatility) for KLCI and S&P 500, US Treasury yields and curve, Malaysia OPR,
-  ringgit crosses, commodities, US inflation / unemployment / Fed funds.
+  ringgit crosses, and 16 US economic series from FRED (inflation, jobs, growth, rates and credit, sentiment).
+- **Commodities**: about 20 energy, metal and farm futures with 1D–1Y changes and distance from the 5-year high, a
+  chart, and which Bursa companies a price rise typically helps or hurts, with the measured correlation as evidence.
 - **Heatmap**: market heatmap by sector.
 
 **Research**
@@ -33,10 +35,19 @@ CSV uploads, no paid APIs, no broker connection: everything is calculated in the
     structure, trendlines, divergence, Fibonacci retracement and extension.
   - *Fundamentals*: valuation, profitability (incl. ROIC), financial health, growth, cash flow and dividends,
     with plain-language explanations; banks are judged without debt/liquidity ratios.
+  - *News & analysts*: company headlines, consensus rating, price targets and estimates.
+  - *Financials*: annual and quarterly income statement, balance sheet and cash flow, plus sector peers.
+  - *Valuation*: a two-stage discounted-cash-flow model with adjustable assumptions and a sensitivity table.
+  - *Ownership*: major and institutional holders, insider trades, and (US stocks) short interest and options
+    activity.
+  - *Notes*: your own research notes on the stock.
 - **Compare**: 2–4 stocks side by side (performance, risk, scores, key ratios, correlation).
 - **Picks**: short-term and long-term ideas, ranked.
+- **Notes**: all your research notes in one place, searchable.
 
-**Trade**
+**Portfolio & trade**
+- **My Portfolio**: the shares you actually own, entered by hand or pasted as a list (no broker connection),
+  priced live with profit/loss, today's change, weights, estimated dividends received and allocation charts.
 - **Terminal**: three-panel workspace: watchlist with categories and favourites, chart with ranges, chart
   types, overlays, indicator panes and drawing tools, and an overview with technicals, scenarios and
   fundamentals. Layout and indicators are adjustable.
@@ -44,7 +55,7 @@ CSV uploads, no paid APIs, no broker connection: everything is calculated in the
 - **Paper Trade**: virtual MYR and USD accounts with market/limit/stop orders, stop-loss/take-profit,
   Bursa board lots and fees, positions, history, stats and an equity curve.
 - **Risk**: volatility, beta, 1-day Value at Risk, drawdown, risk contribution, stop distances, sector and
-  currency concentration and stress tests for your paper portfolio or watchlist.
+  currency concentration and stress tests for your real portfolio, paper portfolio or watchlist.
 - **TradingView**: the TradingView chart widget.
 
 **Income & events**
@@ -61,14 +72,17 @@ CSV uploads, no paid APIs, no broker connection: everything is calculated in the
 |---|---|---|
 | Yahoo Finance (`yfinance`) | prices, the full Bursa list, company data, statements, dividends, calendars, US movers | Bursa prices are ~15 minutes delayed; US near real time. Fundamentals for small Bursa companies are often incomplete (shown as N/A). |
 | Bank Negara Malaysia open API | Overnight Policy Rate | keyless |
-| FRED (St. Louis Fed) CSV | US CPI, unemployment, Fed funds, 10y–2y spread | keyless |
+| FRED (St. Louis Fed) CSV | 16 US economic series | keyless |
 | Nasdaq IPO calendar, Google News RSS | IPOs, news | headlines only |
 
 Values that need more history than exists (for example EMA 200 on a new listing) are shown as N/A, never
 estimated. Signals use completed candles only (setting in the sidebar), and backtests are walk-forward with no
 look-ahead. Crude palm oil futures and a free economic-release calendar are not available, so they are not
-shown. Your watchlist, favourites, saved screens, scoring weights and paper account are saved on the app server
-and in your browser; download a paper-account backup now and then.
+shown. Short interest, insider filings and options exist on Yahoo for US stocks only. Your watchlist, favourites,
+saved screens, scoring weights, notes, portfolio and paper account are saved on the app server and in your
+browser; download a paper-account backup now and then.
+
+**Light or dark**: the app follows your device setting; pick Light or Dark in the ⋮ menu → Settings to fix it.
 
 ## Run locally
 
@@ -91,6 +105,7 @@ indicators.py     full indicator library (warm-up aware, no look-ahead)
 engine.py         explainable technical scoring, conclusion, horizons, opportunities
 fundamentals.py   fundamental metrics and scores
 research.py       risk statistics, events, macro data
+stockinfo.py      analysts, ownership, insiders, short interest, options, quarterly statements, peers, DCF
 ta_plus.py        fees, position sizing, multi-timeframe, patterns, walk-forward test
 terminal.py, paper.py, multichart.py, picks.py, extras.py, learn.py, prefs.py
 views/            one module per page
