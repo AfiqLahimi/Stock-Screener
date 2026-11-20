@@ -18,6 +18,7 @@ import extras
 import learn
 import picks
 import ta_plus
+import paper
 import terminal
 
 st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈", layout="wide")
@@ -1284,6 +1285,7 @@ a{{color:{P['accent']}}}
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
+    search_slot = st.container()
     st.toggle("📱 Phone layout", value=AUTO_MOBILE, key="mobile",
               help="Smaller charts, compact tables and fewer indicator panels for phone screens. "
                    "Switches on automatically when the app is opened on a phone.")
@@ -1302,13 +1304,13 @@ with st.sidebar:
         with st.expander("🔧 Filter Bursa stocks", expanded=True):
             sectors_sel = st.multiselect("Sectors", YF_SECTORS + ["Other"], default=[],
                                          placeholder="All sectors")
-            min_price = st.number_input("Min price (RM)", 0.0, 100.0, 0.10, 0.05, format="%.2f",
+            min_price = st.number_input("Min price (RM)", 0.0, 100.0, 0.0, 0.05, format="%.2f",
                                         help="Skip very cheap (penny) stocks")
             min_value = st.select_slider("Min daily trading value (RM)",
                                          [0, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000],
-                                         value=100_000, format_func=lambda v: f"{v:,.0f}",
+                                         value=0, format_func=lambda v: f"{v:,.0f}",
                                          help="Skip stocks that rarely trade (hard to buy/sell)")
-            max_n = st.select_slider("Scan up to (most traded first)", [50, 100, 200, 300, 500, 1000],
+            max_n = st.select_slider("Scan up to (most traded first)", [50, 100, 200, 300, 500, 1000, 2000],
                                      value=100, help="More stocks = slower first load")
         bursa_filter = (tuple(sectors_sel), min_price, min_value, max_n)
     tf_name = st.selectbox("Timeframe", list(INTERVALS.keys()), index=0)
@@ -1332,16 +1334,49 @@ st.markdown(f"""
 <div class="sub">Bursa Malaysia & US · signals, support/resistance, trend forecast</div></div>
 <div class="live"><i></i>Updated {now_txt} MYT</div></div>""", unsafe_allow_html=True)
 
-bursa_all = pd.DataFrame()
 sector_map = None
-if market == "Bursa: all stocks":
-    with st.spinner("Loading the full Bursa list… (first time only, ~20 seconds)"):
+with st.spinner("Loading the full Bursa list… (first time only, ~20 seconds)"):
+    try:
         bursa_all = load_bursa_all()
+    except Exception:
+        bursa_all = pd.DataFrame()
+if not bursa_all.empty:
+    NAMES.update(dict(zip(bursa_all["ticker"], bursa_all["name"])))
+
+
+def all_symbols():
+    """Every symbol the app knows: full Bursa list (Yahoo), the blue chips and the US list."""
+    out = list(BURSA)
+    if not bursa_all.empty:
+        out += list(bursa_all.sort_values("name")["ticker"])
+    out += list(US)
+    return list(dict.fromkeys(out))
+
+
+def _open_everywhere():
+    t = st.session_state.get("find_any")
+    if t:
+        st.session_state["an_typed"] = t
+        st.session_state["term_sym"] = t
+        st.session_state["pt_symbol"] = t
+        st.session_state["pt_other"] = ""
+
+
+with search_slot:
+    _opts = all_symbols()
+    st.selectbox(f"🔍 Find any stock ({len(_opts):,} listed)", _opts, index=None, key="find_any",
+                 placeholder="Type a name or code…", on_change=_open_everywhere,
+                 format_func=lambda t: f"{display_name(t)} · {t}",
+                 help="Every Bursa stock Yahoo lists, plus the US list. Picking one opens it in Analysis, Terminal "
+                      "and the Paper Trade ticket. Not in the list? Type its 4-digit code in those tabs.")
+    if st.session_state.get("find_any"):
+        st.caption(f"Opened {display_name(st.session_state['find_any'])} in 📊 Analysis, 🖥️ Terminal and 💼 Paper Trade.")
+
+if market == "Bursa: all stocks":
     if bursa_all.empty:
         st.warning("Couldn't load the full Bursa list right now, showing the top 30 instead.")
         universe = tuple(BURSA.keys())
     else:
-        NAMES.update(dict(zip(bursa_all["ticker"], bursa_all["name"])))
         secs, min_price, min_value, max_n = bursa_filter
         f = bursa_all.copy()
         f["value"] = f["price"].fillna(0) * f["avg_volume"].fillna(0)
@@ -1369,8 +1404,8 @@ elif market == "US":
 else:
     universe = tuple(dict.fromkeys(t for t in (normalise(s) for s in custom.split(",")) if t))
 
-tab_scr, tab_term, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
-    ["🔎  Screener", "🖥️  Terminal", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
+tab_scr, tab_term, tab_pt, tab_pk, tab_hm, tab_an, tab_div, tab_ipo, tab_tv, tab_learn = st.tabs(
+    ["🔎  Screener", "🖥️  Terminal", "💼  Paper Trade", "🎯  Picks", "🗺️  Heatmap", "📊  Analysis & Forecast", "💰  Dividends", "🚀  IPO",
      "📺  TradingView", "🎓  Learn"])
 prices = {}
 
@@ -1464,7 +1499,7 @@ with tab_scr:
 
 # ---------------- Analysis ----------------
 with tab_an:
-    opts = list(universe) if universe else ["1155.KL"]
+    opts = list(dict.fromkeys((list(universe) if universe else ["1155.KL"]) + all_symbols()))
     c1, c2, c3, c4 = st.columns([2.2, 1.4, 1, 1])
     pick = c1.selectbox("Stock", opts, format_func=lambda t: f"{display_name(t)}  ·  {t}", key="pick")
     typed = c2.text_input("Or type a ticker", placeholder="e.g. GAMUDA, 5398, NVDA", key="an_typed")
@@ -1950,47 +1985,14 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                                + (f" · platform {cur}{fb_['platform']:.2f}" if fb_['platform'] else "")
                                + ". Sell-side fees are similar and are included in the risk and profit numbers.")
 
-                # ---- paper trading journal
-                st.markdown("##### 📝 Paper-trading journal")
-                st.caption("Manual and paper trading only: this app never places real orders.")
-                jcol1, jcol2 = st.columns([1, 3])
-                if jcol1.button("➕ Add this plan as a paper trade", disabled=not sh):
-                    st.session_state.setdefault("paper", []).append({
-                        "Opened": pd.Timestamp.now(tz="Asia/Kuala_Lumpur").strftime("%Y-%m-%d %H:%M"),
-                        "Ticker": ticker, "Name": display_name(ticker), "Entry": entry, "Stop": stop,
-                        "T1": t1, "T2": t2, "Shares": sh})
-                up = jcol2.file_uploader("Restore a saved journal (CSV)", type="csv", label_visibility="collapsed")
-                if up is not None and not st.session_state.get("_paper_loaded"):
-                    st.session_state["paper"] = pd.read_csv(up).to_dict("records")
-                    st.session_state["_paper_loaded"] = True
-                paper = st.session_state.get("paper", [])
-                if paper:
-                    rows_ = []
-                    for tr_ in paper:
-                        px = load_one(tr_["Ticker"], "1d", "1y")
-                        now_p = float(px["Close"].iloc[-1]) if not px.empty else np.nan
-                        since = px[px.index >= pd.Timestamp(tr_["Opened"][:10])] if not px.empty else px
-                        status = "Open"
-                        if len(since):
-                            if float(since["Low"].min()) <= tr_["Stop"]:
-                                status = "Stop hit"
-                            elif float(since["High"].max()) >= tr_["T2"]:
-                                status = "T2 hit"
-                            elif float(since["High"].max()) >= tr_["T1"]:
-                                status = "T1 hit"
-                        pnl = ta_plus.net_pnl(int(tr_["Shares"]), tr_["Entry"], now_p, tr_["Ticker"], cfg) \
-                            if not np.isnan(now_p) else np.nan
-                        rows_.append({**tr_, "Now": now_p, "Status": status, "Net P/L (if sold now)": pnl})
-                    jdf = pd.DataFrame(rows_)
-                    st.dataframe(jdf, hide_index=True, width="stretch",
-                                 column_config={"Net P/L (if sold now)": st.column_config.NumberColumn(format="%.2f"),
-                                                "Now": st.column_config.NumberColumn(format="%.3f")})
-                    st.caption("Journal is kept for this browser session. Copy it to keep it: select the table → "
-                               "Download (top-right of the table), then restore it next time with the uploader above.")
-                    if st.button("🗑️ Clear journal"):
-                        st.session_state["paper"] = []
-                        st.session_state["_paper_loaded"] = False
-                        st.rerun()
+                # ---- send to paper trading
+                st.markdown("##### 💼 Practise this plan")
+                st.button("Send this plan to 💼 Paper Trade (limit buy + stop loss + take profit)",
+                          disabled=not sh, on_click=lambda: st.session_state.update(pt_prefill={
+                              "ticker": ticker, "entry": entry, "stop": stop, "t1": t1, "qty": sh}))
+                if st.session_state.get("pt_prefill"):
+                    st.success("Done: open the 💼 Paper Trade tab, the order ticket is filled in.")
+                st.caption("Paper trading only: this app never places real orders.")
 
         # ================= Multi-timeframe
         with tabs[3]:
@@ -2373,6 +2375,10 @@ with tab_div:
 # ---------------- IPO ----------------
 with tab_ipo:
     extras.render_ipo(P, pill)
+
+# ---------------- Paper trading ----------------
+with tab_pt:
+    paper.render(display_name, normalise, P, pill, all_symbols, analyse, trade_plan)
 
 # ---------------- Terminal ----------------
 with tab_term:
