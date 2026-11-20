@@ -2,6 +2,8 @@
 
 The colour palette lives in core.P and is unchanged; this file only decides how things are laid out.
 """
+from contextlib import contextmanager
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -80,6 +82,42 @@ def phone_nav(pages, current):
             st.page_link(pg, label=pg.title.replace(" & Forecast", ""), icon=pg.icon)
 
 
+TAPE = [("^KLSE", "KLCI"), ("^GSPC", "S&P 500"), ("^IXIC", "NASDAQ"), ("^DJI", "DOW"), ("MYR=X", "USD/MYR"),
+        ("GC=F", "GOLD"), ("CL=F", "CRUDE"), ("^VIX", "VIX"), ("BTC-USD", "BTC")]
+
+
+def ticker_tape():
+    """Scrolling strip of the main markets under the top bar (one batched quote request, cached 60 s)."""
+    try:
+        import terminal
+        q = terminal.load_quotes(tuple(t for t, _ in TAPE))
+    except Exception:
+        return
+    items = []
+    for t, name in TAPE:
+        if t not in q.index or q.loc[t, "last"] != q.loc[t, "last"]:
+            continue
+        last, pct = float(q.loc[t, "last"]), q.loc[t, "pct"]
+        col = P["muted"] if pct != pct else (P["up"] if pct >= 0 else P["down"])
+        arrow = "" if pct != pct else ("▲" if pct >= 0 else "▼")
+        dec = 4 if t == "MYR=X" else 2
+        items.append(f"<span class='tk'><b>{name}</b><span class='mono'>{last:,.{dec}f}</span>"
+                     f"<span class='mono' style='color:{col}'>{arrow} {'N/A' if pct != pct else f'{pct:+.2f}%'}</span></span>")
+    if items:
+        strip = "".join(items)
+        st.markdown(f"<div class='tape'><div class='tape-track'>{strip}{strip}</div></div>", unsafe_allow_html=True)
+
+
+@contextmanager
+def panel(title, sub=None, key=None):
+    """A bordered panel with its own header bar (title left, note right), like a terminal window."""
+    k = key or re.sub(r"\W+", "_", title.lower()).strip("_")
+    with st.container(border=True, key=f"pnl_{k}"):
+        sub_html = f"<span class='sub'>{sub}</span>" if sub else ""
+        st.markdown(f"<div class='panel-h'><h2>{title}</h2>{sub_html}</div>", unsafe_allow_html=True)
+        yield
+
+
 def section(title, sub=None):
     st.markdown(f"<div class='sec'><span>{title}</span>{f'<em>{sub}</em>' if sub else ''}</div>",
                 unsafe_allow_html=True)
@@ -148,7 +186,27 @@ Technical read only, not advice.</div></div>"""
 # ----------------------------------------------------------------------------
 CSS = """
 <style>
-html, body, [data-testid="stAppViewContainer"]{{font-variant-numeric:tabular-nums}}
+html, body, [data-testid="stAppViewContainer"]{{font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}}
+.mono, .idx .v, .idx .c, [data-testid="stMetricValue"], [data-testid="stMetricDelta"], .head .price, .head .chg,
+.kv td:last-child, .pl b, .tk .mono{{font-family:SF Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-variant-numeric:tabular-nums}}
+/* ---------- ticker tape */
+.tape{{overflow:hidden;white-space:nowrap;border:1px solid {border};border-radius:10px;background:{card};
+  margin:-4px 0 14px;user-select:none;mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}}
+.tape-track{{display:inline-block;padding:6px 0;animation:tape 70s linear infinite}}
+.tape:hover .tape-track{{animation-play-state:paused}}
+@keyframes tape{{from{{transform:translateX(0)}}to{{transform:translateX(-50%)}}}}
+.tk{{display:inline-flex;align-items:baseline;gap:7px;margin:0 18px;font-size:12px}}
+.tk b{{color:{muted};font-weight:600;letter-spacing:.04em}}
+/* ---------- panels (bordered container with a header bar) */
+[class*="st-key-pnl_"]{{background:{card};border:1px solid {border} !important;border-radius:12px !important;
+  padding:11px 15px 14px !important;gap:.55rem !important;overflow:hidden}}
+.panel-h{{display:flex;align-items:baseline;gap:10px;margin:-11px -15px 4px;padding:10px 15px 9px;
+  border-bottom:1px solid {border};background:{card2}}}
+.panel-h h2{{font-size:11.5px !important;text-transform:uppercase;letter-spacing:.12em;color:{text};margin:0 !important;
+  padding:0 !important;font-weight:700 !important;line-height:1.3 !important}}
+.panel-h .sub{{font-size:11px;color:{muted};margin-left:auto;text-align:right}}
+[class*="st-key-pnl_"] .card{{background:transparent;border:none;padding:0;margin:0}}
+[class*="st-key-pnl_"] [data-testid="stMetric"]{{background:{bg}}}
 .block-container{{padding-top:3.9rem;padding-bottom:2.5rem;max-width:1560px}}
 h1,h2,h3,h4{{letter-spacing:-0.01em}}
 h3{{font-size:1.25rem !important}}
@@ -158,24 +216,24 @@ h3{{font-size:1.25rem !important}}
 .topbar .brand{{display:flex;align-items:center;gap:11px}}
 .topbar .logo{{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(135deg,{accent},{up});font-size:18px}}
-.topbar .bname{{font-size:15px;font-weight:700;line-height:1.15}}
+.topbar .bname{{font-size:13px;font-weight:800;line-height:1.15;letter-spacing:.12em;text-transform:uppercase}}
 .topbar .crumb{{font-size:12.5px;color:{muted};margin-top:1px}}
 .tb-right{{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}}
 .chip{{font-size:11.5px;color:{text};display:inline-flex;align-items:center;gap:7px;background:{card};
   border:1px solid {border};padding:4px 10px;border-radius:999px;white-space:nowrap}}
 .chip.muted{{color:{muted}}}
 .chip i{{width:7px;height:7px;border-radius:50%;display:inline-block}}
-.sec{{display:flex;align-items:baseline;gap:10px;margin:14px 0 8px;font-size:12px;font-weight:700;
-  text-transform:uppercase;letter-spacing:.07em;color:{muted}}}
+.sec{{display:flex;align-items:baseline;gap:10px;margin:14px 0 8px;font-size:11.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.12em;color:{muted}}}
 .sec em{{font-style:normal;font-weight:400;text-transform:none;letter-spacing:0}}
 /* ---------- metric cards */
 [data-testid="stMetric"]{{background:{card};border:1px solid {border};border-radius:10px;padding:11px 15px}}
-[data-testid="stMetricLabel"] p{{color:{muted} !important;font-size:11px !important;text-transform:uppercase;letter-spacing:.06em}}
-[data-testid="stMetricValue"]{{font-size:22px !important;font-weight:600}}
+[data-testid="stMetricLabel"] p{{color:{muted} !important;font-size:10.5px !important;text-transform:uppercase;letter-spacing:.1em}}
+[data-testid="stMetricValue"]{{font-size:19px !important;font-weight:700}}
 [data-testid="stMetricDelta"]{{font-size:12px !important}}
 /* ---------- tabs inside a page */
 .stTabs [data-baseweb="tab-list"]{{gap:2px;border-bottom:1px solid {border}}}
-.stTabs [data-baseweb="tab"]{{padding:8px 14px;border-radius:8px 8px 0 0;font-weight:600;font-size:14px;color:{muted}}}
+.stTabs [data-baseweb="tab"]{{padding:7px 13px;border-radius:7px 7px 0 0;font-weight:600;font-size:13px;color:{muted}}}
 .stTabs [aria-selected="true"]{{color:{text} !important;background:{card}}}
 /* ---------- sidebar + navigation */
 section[data-testid="stSidebar"]{{background:{card};border-right:1px solid {border}}}
@@ -230,6 +288,9 @@ a{{color:{accent}}}
   .tb-right{{margin-left:0;width:100%}}
   .chip{{font-size:10.5px;padding:3px 8px}}
   .chip.muted{{display:none}}
+  .tape{{margin:0 0 10px}}
+  [class*="st-key-pnl_"]{{padding:10px 12px 12px !important}}
+  .panel-h{{margin:-10px -12px 4px;padding:9px 12px 8px}}
   .stTabs [data-baseweb="tab-list"]{{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;gap:2px}}
   .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{{display:none}}
   .stTabs [data-baseweb="tab"]{{padding:7px 10px;font-size:13.5px;white-space:nowrap;flex:0 0 auto}}

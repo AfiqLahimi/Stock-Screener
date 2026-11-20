@@ -148,7 +148,7 @@ def table(df, key, cols, height=None, config=None):
             "To resistance %": cc.NumberColumn("To resistance", format="%.1f%%"),
             "RSI": cc.NumberColumn(format="%.0f")}
     st.dataframe(df, hide_index=True, width="stretch", column_order=cols, key=key,
-                 column_config={**base, **(config or {})}, height=height or min(35 * (len(df) + 1) + 3, 460),
+                 column_config={**base, **(config or {})}, height=height or ("content" if len(df) <= 12 else 430),
                  on_select=partial(_open_row, key, list(df["Ticker"])), selection_mode="single-row")
 
 
@@ -173,7 +173,6 @@ def render(C):
         dec = 4 if t == "MYR=X" else 2
         cards.append(f"<div class='idx'><div class='n'>{name}</div><div class='v'>{s['last']:,.{dec}f}</div>"
                      f"<div class='c' style='color:{col}'>{_fmt(s['1D'])}</div>{spark(s['spark'], col)}</div>")
-    ui.section("Market overview", "last 60 sessions")
     st.markdown(f"<div class='idx-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
     scan = pd.DataFrame()
@@ -193,9 +192,8 @@ def render(C):
         liq = liq[liq["price"] * liq["avg_volume"].fillna(0) >= MIN_VALUE]
 
     # ------------------------------------------------------------ E + B. charts | pulse
-    left, right = (st.container(), st.container()) if mob else st.columns([1.7, 1], gap="medium")
-    with left:
-        ui.section("Market charts")
+    left, right = (st.container(), st.container()) if mob else st.columns([2.45, 1], gap="small")
+    with left, ui.panel("Market charts", "daily · EMA 20 / 50 / 200"):
         h1, h2 = st.columns([1.35, 1])
         idx = h1.segmented_control("Index", list(CHART_IDX), default="^KLSE", key="db_idx",
                                    format_func=CHART_IDX.get, label_visibility="collapsed") or "^KLSE"
@@ -229,55 +227,54 @@ def render(C):
         st.caption("Trend: price vs 50- and 200-day EMAs and whether the 50 is above the 200 (3 of 3 = Uptrend). "
                    "ADX regime: trend strength (see Learn).")
 
-    with right:
-        ui.section("Market pulse", "Bursa" if is_bursa else "your list")
+    with right, ui.panel("Market pulse", "Bursa" if is_bursa else "your list"):
         pulse(scan, liq if is_bursa else pd.DataFrame(), stats.get("^KLSE" if is_bursa else "^GSPC"),
               "FBM KLCI" if is_bursa else "S&P 500", snap)
 
     # ------------------------------------------------------------ A. movers
-    ui.section("Top movers", "today")
-    tb, tu = st.tabs(["🇲🇾 Bursa", "🇺🇸 US"])
-    with tb:
-        if liq.empty:
-            st.info("Bursa movers N/A: the Bursa-wide list from Yahoo isn't available right now.")
-        else:
-            m = liq.rename(columns={"ticker": "Ticker", "name": "Name", "price": "Price", "chg": "Change %"})
-            g1, g2, g3 = (st.container(),) * 3 if mob else st.columns(3)
-            with g1:
-                st.markdown("**▲ Top gainers**")
-                table(m.sort_values("Change %", ascending=False).head(8), "db_gain", ["Name", "Price", "Change %"])
-            with g2:
-                st.markdown("**▼ Top losers**")
-                table(m.sort_values("Change %").head(8), "db_lose", ["Name", "Price", "Change %"])
-            with g3:
-                st.markdown("**🔥 Most active (by value)**")
-                table(m.sort_values("Value (RM)", ascending=False).head(8), "db_act",
-                      ["Name", "Price", "Value (RM)"])
-            st.caption(f"Only stocks trading at least RM{MIN_VALUE:,.0f} a day on average, so thin penny stocks "
-                       f"don't fill the list. Snapshot as of {_asof(snap)}.")
-    with tu:
-        u1, u2, u3 = (st.container(),) * 3 if mob else st.columns(3)
-        for col_, kind, title in ((u1, "day_gainers", "▲ Top gainers"), (u2, "day_losers", "▼ Top losers"),
-                                  (u3, "most_actives", "🔥 Most active")):
-            with col_:
-                st.markdown(f"**{title}**")
-                table(us_movers(kind).head(8), f"db_us_{kind}", ["Ticker", "Name", "Price", "Change %"]
-                      if kind != "most_actives" else ["Ticker", "Price", "Change %", "Volume"])
-        st.caption("From Yahoo's free US screeners (large and mid caps). Refreshed every 10 minutes.")
+    with ui.panel("Top movers", f"today · Bursa snapshot {_asof(snap)}"):
+        tb, tu = st.tabs(["🇲🇾 Bursa", "🇺🇸 US"])
+        with tb:
+            if liq.empty:
+                st.info("Bursa movers N/A: the Bursa-wide list from Yahoo isn't available right now.")
+            else:
+                m = liq.rename(columns={"ticker": "Ticker", "name": "Name", "price": "Price", "chg": "Change %"})
+                g1, g2, g3 = (st.container(),) * 3 if mob else st.columns(3)
+                with g1:
+                    st.markdown("**▲ Top gainers**")
+                    table(m.sort_values("Change %", ascending=False).head(8), "db_gain",
+                          ["Name", "Price", "Change %"])
+                with g2:
+                    st.markdown("**▼ Top losers**")
+                    table(m.sort_values("Change %").head(8), "db_lose", ["Name", "Price", "Change %"])
+                with g3:
+                    st.markdown("**🔥 Most active (by value)**")
+                    table(m.sort_values("Value (RM)", ascending=False).head(8), "db_act",
+                          ["Name", "Price", "Value (RM)"])
+                st.caption(f"Only stocks trading at least RM{MIN_VALUE:,.0f} a day on average, so thin penny stocks "
+                           f"don't fill the list.")
+        with tu:
+            u1, u2, u3 = (st.container(),) * 3 if mob else st.columns(3)
+            for col_, kind, title in ((u1, "day_gainers", "▲ Top gainers"), (u2, "day_losers", "▼ Top losers"),
+                                      (u3, "most_actives", "🔥 Most active")):
+                with col_:
+                    st.markdown(f"**{title}**")
+                    table(us_movers(kind).head(8), f"db_us_{kind}", ["Ticker", "Name", "Price", "Change %"]
+                          if kind != "most_actives" else ["Ticker", "Price", "Change %", "Volume"])
+            st.caption("From Yahoo's free US screeners (large and mid caps). Refreshed every 10 minutes.")
 
     # ------------------------------------------------------------ B. sectors | news
-    sc_col, nw_col = (st.container(), st.container()) if mob else st.columns([1, 1], gap="medium")
-    with sc_col:
-        ui.section("Bursa sectors", "today")
+    sc_col, nw_col = (st.container(), st.container()) if mob else st.columns([1, 1], gap="small")
+    with sc_col, ui.panel("Bursa sectors", "today · market-cap weighted"):
         if liq.empty:
             st.info("Sector performance N/A right now.")
         else:
             st.plotly_chart(sector_chart(liq, mob), width="stretch",
                             config={"displaylogo": False, "displayModeBar": False}, key="db_sec")
-            st.caption("Market-cap-weighted average of today's % change per Yahoo sector (liquid stocks only).")
+            st.caption("Average of today's % change per Yahoo sector, weighted by market cap (liquid stocks only). "
+                       "Number in brackets = stocks counted.")
             st.button("🗺️ Open the full heatmap", on_click=ui.goto, args=("heatmap",), key="db_hm")
-    with nw_col:
-        ui.section("Market news")
+    with nw_col, ui.panel("Market news", "Google News"):
         n1, n2 = st.tabs(["🇲🇾 Bursa / Malaysia", "🇺🇸 US markets"])
         with n1:
             news_list(load_news('("Bursa Malaysia" OR KLCI OR "Bursa stocks") when:3d', "en-MY", "MY"))
@@ -285,12 +282,12 @@ def render(C):
             news_list(load_news('("stock market" OR "Wall Street" OR "S&P 500") when:2d', "en-US", "US"))
 
     # ------------------------------------------------------------ C. watchlist
-    ui.section("Watchlist", "shared with the Terminal")
-    watchlist(C)
+    with ui.panel("Watchlist", "shared with the Terminal"):
+        watchlist(C)
 
     # ------------------------------------------------------------ D. opportunities
-    ui.section("Trading opportunities", f"daily candles · {len(scan)} stocks scanned from the sidebar universe")
-    opportunities(scan, mob)
+    with ui.panel("Trading opportunities", f"daily candles · {len(scan)} stocks from the sidebar universe"):
+        opportunities(scan, mob)
 
 
 def _asof(df):
@@ -362,7 +359,7 @@ def pulse(scan, liq, idx, idx_name, snap):
 breadth and trend participation; it is not a forecast.</div></div>""", unsafe_allow_html=True)
     if not scan.empty:
         hi, lo = int(scan["Breakout"].sum()), int(scan["Breakdown"].sum())
-        st.markdown(f"<div class='card'><div class='pl'><span>New 20-day highs / lows (scanned)</span>"
+        st.markdown(f"<div class='card divider'><div class='pl'><span>New 20-day highs / lows (scanned)</span>"
                     f"<b><span style='color:{P['up']}'>{hi}</span> / <span style='color:{P['down']}'>{lo}</span></b>"
                     f"</div><div class='note'>More new highs than lows = buyers in control across many stocks."
                     f"</div></div>", unsafe_allow_html=True)
@@ -396,7 +393,7 @@ def news_list(items):
         f"<div class='meta'>{it['source']} · {it['date']:%d %b %H:%M}</div></div>" if it["date"] is not None else
         f"<div class='news'><a href='{it['link']}' target='_blank'>{it['title']}</a>"
         f"<div class='meta'>{it['source']}</div></div>" for it in items[:8])
-    st.markdown(f"<div class='card' style='padding-top:4px;padding-bottom:4px'>{html}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='newsbox'>{html}</div>", unsafe_allow_html=True)
 
 
 def _wl_add():
@@ -466,17 +463,19 @@ def opportunities(scan, mob):
 
 
 CSS = """<style>
-.idx-grid{{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px;margin-bottom:6px}}
-.idx{{background:{card};border:1px solid {border};border-radius:10px;padding:9px 11px 6px}}
-.idx .n{{font-size:11px;color:{muted};text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}}
-.idx .v{{font-size:17px;font-weight:700;margin-top:2px}}
+.idx-grid{{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:10px;margin-bottom:14px}}
+.newsbox .news:first-child{{padding-top:2px}}
+.idx{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 13px 7px}}
+.idx .n{{font-size:10.5px;color:{muted};text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;margin-bottom:5px}}
+.idx .v{{font-size:18px;font-weight:700}}
 .idx .c{{font-size:12.5px;font-weight:600}}
 .spark{{width:100%;height:26px;display:block;margin-top:3px}}
 .bar{{height:6px;background:{card2};border-radius:4px;overflow:hidden;margin-top:5px}}
 .bar.big{{height:9px;margin-top:10px}}
 .bar i{{display:block;height:100%;border-radius:4px}}
 .pc{{margin-bottom:9px}}
+.card.divider{{margin-top:10px !important;padding-top:10px !important;border-top:1px solid {border} !important}}
 .pl{{display:flex;justify-content:space-between;gap:10px;font-size:13px}}
 .pl span{{color:{muted}}}
 .ps{{font-size:11.5px;color:{muted};margin-top:2px}}

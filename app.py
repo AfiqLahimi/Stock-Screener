@@ -174,6 +174,7 @@ C.__dict__.update(universe=universe, bursa_all=bursa_all, sector_map=sector_map,
                   tf_name=tf_name, closed_only=closed_only, mobile=MOBILE)
 
 ui.topbar(nav.title, nav.icon)
+ui.ticker_tape()
 if MOBILE:
     ui.phone_nav(PAGES, nav.url_path)
 nav.run()
