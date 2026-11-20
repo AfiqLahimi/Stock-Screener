@@ -5,41 +5,24 @@ from core import *  # noqa: F401,F403
 def render(C):
     universe, interval, period, unit = C.universe, C.interval, C.period, C.unit
     shariah_set, MOBILE = C.shariah_set, C.mobile
-    rows = []
+    tbl = pd.DataFrame()
     if not universe:
         st.info("Enter at least one ticker in the sidebar.")
     else:
         with st.spinner(f"Scanning {len(universe)} stocks..."):
-            data = get_many(universe, interval, period)
-        for t, df in data.items():
-            try:
-                d, sup, res, sc, label, _ = analyse(df)
-                p = trade_plan(d, sup, res, label, unit)
-                last, prev = d.iloc[-1], d.iloc[-2]
-                price = float(last["Close"])
-                rows.append({
-                    "Name": display_name(t), "Ticker": t,
-                    **({"Shariah": "✅" if t in shariah_set else "–"} if shariah_set and t.endswith(".KL") else {}),
-                    "Price": price,
-                    "Change %": (price / float(prev["Close"]) - 1) * 100,
-                    "Signal": f"{LABEL_DOT[label]} {label}", "_label": label, "Score": sc,
-                    "RSI": float(last["RSI"]),
-                    "RVOL": float(last["RVOL"]) if pd.notna(last["RVOL"]) else None,
-                    "ADX": float(last["ADX"]) if pd.notna(last["ADX"]) else None,
-                    "Trend (ADX)": adx_regime(last["ADX"], last["PDI"], last["MDI"]),
-                    "Support": sup[0][0], "Resistance": res[0][0],
-                    "To support %": (price / sup[0][0] - 1) * 100,
-                    "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
-                    "Stop": p["stop"], "Target": p["t1"], "R:R": p["rr1"],
-                })
-            except Exception:
-                continue
-        missing = [display_name(t) for t in universe if t not in data]
+            tbl = scan_universe(universe, interval, period, unit)
+        if not tbl.empty:
+            tbl = tbl.drop(columns=SCAN_EXTRA)
+            if shariah_set:
+                tbl.insert(2, "Shariah", ["✅" if t in shariah_set else ("–" if t.endswith(".KL") else "")
+                                          for t in tbl["Ticker"]])
+        got = set(tbl["Ticker"]) if not tbl.empty else set()
+        missing = [display_name(t) for t in universe if t not in got]
         if missing:
-            st.caption("No data for: " + ", ".join(missing))
+            st.caption("No data for: " + ", ".join(missing[:60]) + (" …" if len(missing) > 60 else ""))
 
-    if rows:
-        tbl = pd.DataFrame(rows).sort_values("Score", ascending=False).reset_index(drop=True)
+    if not tbl.empty:
+        tbl = tbl.sort_values("Score", ascending=False).reset_index(drop=True)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Stocks scanned", len(tbl))
         c2.metric("Buy signals", int(tbl["_label"].isin(["BUY", "STRONG BUY"]).sum()))

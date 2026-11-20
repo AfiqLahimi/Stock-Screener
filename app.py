@@ -17,7 +17,7 @@ st.set_page_config(page_title="Live Stock Screener & Analysis", page_icon="📈"
 import ui  # noqa: E402
 from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, display_name, load_bursa_all,  # noqa: E402
                   load_shariah, normalise)
-from views import analysis, others, screener  # noqa: E402
+from views import analysis, dashboard, others, screener  # noqa: E402
 
 ui.keep_state()
 AUTO_MOBILE = ui.detect_mobile()
@@ -36,7 +36,8 @@ def _page(fn, title, icon, path, default=False):
 
 
 PAGES = {
-    "screener": _page(screener.render, "Screener", "🔎", "screener", default=True),
+    "dashboard": _page(dashboard.render, "Dashboard", "🏠", "dashboard", default=True),
+    "screener": _page(screener.render, "Screener", "🔎", "screener"),
     "analysis": _page(analysis.render, "Analysis & Forecast", "📊", "analysis"),
     "picks": _page(others.picks_page, "Picks", "🎯", "picks"),
     "terminal": _page(others.terminal_page, "Terminal", "🖥️", "terminal"),
@@ -49,9 +50,10 @@ PAGES = {
     "learn": _page(others.learn_page, "Learn", "🎓", "learn"),
 }
 nav = st.navigation({
+    "Markets": [PAGES[k] for k in ("dashboard", "heatmap")],
     "Research": [PAGES[k] for k in ("screener", "analysis", "picks")],
     "Trade": [PAGES[k] for k in ("terminal", "multichart", "paper", "tradingview")],
-    "Markets & income": [PAGES[k] for k in ("heatmap", "dividends", "ipo")],
+    "Income & events": [PAGES[k] for k in ("dividends", "ipo")],
     "Learn": [PAGES["learn"]],
 }, position="sidebar")
 _go = st.session_state.pop("_goto", None)

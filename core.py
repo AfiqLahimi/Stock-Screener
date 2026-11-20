@@ -239,9 +239,23 @@ def _demo_bursa_all():
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def load_bursa_all() -> pd.DataFrame:
+    """Every stock listed on Bursa Malaysia (names, sectors). Cached 12 h: use load_bursa_snapshot for prices."""
+    return _fetch_bursa_all()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_bursa_snapshot() -> pd.DataFrame:
+    """Same list, refreshed every 10 minutes, for today's moves (breadth, gainers/losers, sectors)."""
+    df = _fetch_bursa_all()
+    df.attrs["asof"] = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").isoformat()
+    return df
+
+
+def _fetch_bursa_all() -> pd.DataFrame:
     """Every stock listed on Bursa Malaysia (Yahoo exchange code KLS), with sector, via Yahoo's screener."""
     if DEMO:
-        return _demo_bursa_all()
+        d = _demo_bursa_all()
+        return d
     from concurrent.futures import ThreadPoolExecutor
     from yfinance import EquityQuery
 
@@ -1198,3 +1212,51 @@ def stock_view(ticker, tf="1D"):
     chg = (float(d["Close"].iloc[-1]) / float(d["Close"].iloc[-2]) - 1) * 100
     return {"d": d, "sup": sup, "res": res, "sc": sc, "label": label, "why": why, "plan": plan, "iv": iv,
             "bars": bars, "ax": adx_analysis(d), "chg": chg, "price": float(d["Close"].iloc[-1])}
+
+
+# ----------------------------------------------------------------------------
+# Universe scan (shared by Screener, Dashboard and others)
+# ----------------------------------------------------------------------------
+@st.cache_data(ttl=60, show_spinner=False)
+def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.DataFrame:
+    """Analyse every stock in the universe once. Columns used by the Screener table come first;
+    the extra ones (prefixed with an underscore or listed in SCAN_EXTRA) feed the Dashboard."""
+    data = get_many(universe, interval, period)
+    rows = []
+    for t, df in data.items():
+        try:
+            d, sup, res, sc, label, _ = analyse(df)
+            p = trade_plan(d, sup, res, label, unit)
+            last, prev = d.iloc[-1], d.iloc[-2]
+            price = float(last["Close"])
+            c20 = float(d["Close"].iloc[-21]) if len(d) > 21 else np.nan
+            rows.append({
+                "Name": display_name(t), "Ticker": t, "Price": price,
+                "Change %": (price / float(prev["Close"]) - 1) * 100,
+                "Signal": f"{LABEL_DOT[label]} {label}", "_label": label, "Score": sc,
+                "RSI": float(last["RSI"]),
+                "RVOL": float(last["RVOL"]) if pd.notna(last["RVOL"]) else None,
+                "ADX": float(last["ADX"]) if pd.notna(last["ADX"]) else None,
+                "Trend (ADX)": adx_regime(last["ADX"], last["PDI"], last["MDI"]),
+                "Support": sup[0][0], "Resistance": res[0][0],
+                "To support %": (price / sup[0][0] - 1) * 100,
+                "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
+                "Stop": p["stop"], "Target": p["t1"], "R:R": p["rr1"],
+                # extras (not shown in the Screener table)
+                "To resistance %": (res[0][0] / price - 1) * 100,
+                "Volume": float(last["Volume"]) if pd.notna(last["Volume"]) else None,
+                "Return 20 %": (price / c20 - 1) * 100 if c20 == c20 and c20 else None,
+                "Above EMA50": bool(price > last["EMA50"]) if len(d) >= 50 else None,
+                "Above EMA200": bool(price > last["EMA200"]) if len(d) >= 200 else None,
+                "Breakout": bool(pd.notna(last["HH20"]) and price > last["HH20"]),
+                "Breakdown": bool(pd.notna(last["LL20"]) and price < last["LL20"]),
+                "MACD hist": float(last["MACDhist"]),
+            })
+        except Exception:
+            continue
+    return pd.DataFrame(rows)
+
+
+SCAN_EXTRA = ["To resistance %", "Volume", "Return 20 %", "Above EMA50", "Above EMA200", "Breakout", "Breakdown",
+              "MACD hist"]
+

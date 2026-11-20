@@ -18,7 +18,7 @@ _KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_filter|ts_[a-
                    r"|term_(add|search|rng|ema|engine)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"
-                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src))$")
+                   r"|pat_filter|picks_(mode|n)|tvhm_(h|src)|db_(idx|rng))$")
 
 
 def detect_mobile():
@@ -68,7 +68,7 @@ def topbar(title, icon):
 </div>""", unsafe_allow_html=True)
 
 
-PHONE_ORDER = ("screener", "analysis", "terminal", "multichart", "paper", "picks", "heatmap", "dividends", "ipo",
+PHONE_ORDER = ("dashboard", "screener", "analysis", "terminal", "multichart", "paper", "picks", "heatmap", "dividends", "ipo",
                "tradingview", "learn")
 
 
