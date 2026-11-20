@@ -442,6 +442,10 @@ def render(display_name, normalise, P, pill, all_symbols, stock_panel):
         other = c2.text_input("…or a code not in the list", placeholder="e.g. 0331, 7123, PLTR", key="pt_other")
         if other.strip():
             ticker = normalise(other)
+        if st.session_state.get("pt_last_sym") not in (None, ticker) and not pre:
+            for k in ("pt_price", "pt_sl", "pt_tp", "pt_use_sl", "pt_use_tp"):
+                st.session_state.pop(k, None)   # prices from another stock make no sense here
+        st.session_state["pt_last_sym"] = ticker
         c = ccy(ticker)
         px = last_price(ticker)
         lot = lot_of(ticker)

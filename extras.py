@@ -533,7 +533,7 @@ e-IPO page (e.g. Maybank2u).</div></div>""", unsafe_allow_html=True)
                          column_config={"Priced on": cc.DateColumn(format="D MMM YYYY"),
                                         "Price now ($)": cc.NumberColumn(format="%.2f"),
                                         "Since IPO %": cc.NumberColumn(format="%+.1f%%")})
-            st.caption("Tip: type any of these tickers in the Analysis tab. New listings have little history, so "
+            st.caption("Tip: type any of these tickers on the Analysis page. New listings have little history, so "
                        "support/resistance and forecasts are less reliable for the first few months.")
 
         fl = pd.DataFrame(data["filed"])

@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+import ui
 from plotly.subplots import make_subplots
 
 DEMO = os.environ.get("DEMO_DATA") == "1"
@@ -359,9 +361,9 @@ def render(display_name, normalise, P, pill, rgba, tv_symbol, tradingview_widget
             with st.expander("About the company"):
                 st.write(summ)
         b1, b2 = st.columns(2)
-        if b1.button("📊 Full analysis", width="stretch", help="Open this symbol in Analysis & Forecast",
-                     on_click=lambda: st.session_state.update(an_typed=sym), disabled=sym.startswith("^") or sym in FUTURES):
-            st.toast("Done: open the 📊 Analysis & Forecast tab, the symbol is filled in.")
+        b1.button("📊 Full analysis", width="stretch", help="Open this symbol in Analysis & Forecast",
+                  on_click=ui.goto, args=("analysis",), kwargs={"an_typed": sym},
+                  disabled=sym.startswith("^") or sym in FUTURES)
         if sym not in stocks and not sym.startswith("^") and sym not in FUTURES and \
                 b2.button("⭐ Add to watchlist", width="stretch"):
             stocks.append(sym)

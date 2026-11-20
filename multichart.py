@@ -1,6 +1,8 @@
 """Multi-Chart: watch up to 6 stocks side by side, each with its signal, score and key levels."""
 import streamlit as st
 
+import ui
+
 
 LAYOUTS = {"3 × 2": 3, "2 × 3": 2, "1 column": 1}
 
@@ -84,8 +86,8 @@ def render(display_name, normalise, P, pill, all_symbols, universe, stock_view, 
                                 key=f"mc_fig_{i}")
                 b1, b2 = st.columns(2)
                 b1.button("📊 Analysis", key=f"mc_an_{i}", width="stretch",
-                          on_click=lambda t=t: st.session_state.update(an_typed=t))
+                          on_click=ui.goto, args=("analysis",), kwargs={"an_typed": t})
                 b2.button("💼 Trade", key=f"mc_pt_{i}", width="stretch",
-                          on_click=lambda t=t: st.session_state.update(pt_symbol=t, pt_other=""))
+                          on_click=ui.goto, args=("paper",), kwargs={"pt_symbol": t, "pt_other": ""})
     st.caption("Lines: green = support, red = resistance, orange dashed = suggested stop, EMAs 20/50/200. "
-               "📊 Analysis / 💼 Trade open that stock in those tabs.")
+               "📊 Analysis / 💼 Trade open that stock on those pages.")
