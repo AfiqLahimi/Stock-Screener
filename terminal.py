@@ -37,7 +37,7 @@ def _demo_series(t, n=400):
                          "Close": c, "Volume": rng.integers(1e5, 8e6, n).astype(float)}, index=idx)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=60)
 def load_quotes(tickers: tuple) -> pd.DataFrame:
     """Last price, change and change % from the last two daily candles."""
     rows = []
@@ -66,7 +66,7 @@ def load_quotes(tickers: tuple) -> pd.DataFrame:
     return q.set_index("t")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=200)
 def load_info(t: str) -> dict:
     if DEMO:
         return {"longName": f"Demo {t}", "sector": "Consumer Defensive", "industry": "Confectioners",
@@ -112,7 +112,7 @@ def _fmt_px(v):
     return f"{v:,.3f}" if abs(v) < 10 else f"{v:,.2f}"
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=120)
 def load_range(sym: str, iv: str, per: str) -> pd.DataFrame:
     if DEMO:
         from core import load_one

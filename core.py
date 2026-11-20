@@ -149,7 +149,7 @@ def _resample_4h(h1: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=400)
 def load_one(ticker: str, interval: str, period: str) -> pd.DataFrame:
     if DEMO:
         d = _demo(ticker, "1h" if interval == "4h" else interval)
@@ -194,12 +194,12 @@ def _download_many(tickers: tuple, interval: str, period: str) -> dict:
     return out
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=30)
 def load_many(tickers: tuple, interval: str, period: str) -> dict:
     return _download_many(tickers, interval, period)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=30)
 def load_many_big(tickers: tuple, interval: str, period: str) -> dict:
     """Same as load_many, cached for 10 minutes, for big lists (Bursa-wide scans)."""
     return _download_many(tickers, interval, period)
@@ -1254,7 +1254,7 @@ def _above(a, b):
     return None if pd.isna(a) or pd.isna(b) else bool(a > b)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=20)
 def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.DataFrame:
     """Analyse every stock in the universe once (shared by Screener, Dashboard, watchlists).
     All values use completed history only; anything inside an indicator's warm-up is None (shown as N/A)."""

@@ -109,6 +109,20 @@ def ticker_tape():
 
 
 @contextmanager
+def guard(label):
+    """Show a contained error instead of crashing the page when live data has a shape nobody expected.
+    Streamlit's own rerun/stop signals are BaseException subclasses, so they still pass through."""
+    try:
+        yield
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        st.error(f"{label} couldn't be shown: {type(e).__name__}: {str(e)[:200]}. The rest of the app still works; "
+                 "try again in a minute or pick another stock.")
+        with st.expander("Technical details"):
+            st.code("".join(traceback.format_exception(e))[-3000:])
+
+
+@contextmanager
 def panel(title, sub=None, key=None):
     """A bordered panel with its own header bar (title left, note right), like a terminal window."""
     k = key or re.sub(r"\W+", "_", title.lower()).strip("_")
@@ -278,6 +292,31 @@ a{{color:{accent}}}
 .live i{{width:8px;height:8px;border-radius:50%;background:{up};display:inline-block;box-shadow:0 0 0 3px {up_ring}}}
 [data-testid="stDataFrame"]{{border:1px solid {border};border-radius:10px}}
 .foot{{color:{muted};font-size:12px;line-height:1.6;border-top:1px solid {border};padding-top:12px;margin-top:22px}}
+/* ---------- shared report pieces (scores, evidence tables, alerts) */
+.sg-row{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}}
+.sg{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 14px}}
+.sg-t{{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:{muted}}}
+.sg-v{{font-family:SF Mono,ui-monospace,Menlo,Consolas,monospace;font-size:26px;font-weight:700;margin-top:4px}}
+.sg-v span{{font-size:12px;color:{muted};margin-left:3px}}
+.sg-s{{font-size:12px;color:{muted};margin-top:5px;line-height:1.4}}
+.bar{{height:6px;background:{card2};border-radius:4px;overflow:hidden;margin-top:6px}}
+.bar i{{display:block;height:100%;border-radius:4px}}
+.gs-row{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}}
+.ev{{width:100%;border-collapse:collapse;font-size:12.5px}}
+.ev th{{text-align:left;color:{muted};font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+  padding:6px 8px;border-bottom:1px solid {border}}}
+.ev td{{padding:7px 8px;border-bottom:1px solid {border};vertical-align:top}}
+.ev tr:last-child td{{border-bottom:none}}
+.concl{{width:100%;border-collapse:collapse;font-size:13px}}
+.concl td{{padding:7px 8px;border-bottom:1px solid {border};vertical-align:top;line-height:1.5}}
+.concl td:first-child{{color:{muted};width:190px;font-weight:600}}
+.hz{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
+.hz > div{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 14px}}
+.op{{border:1px solid {border};border-left:3px solid {accent};border-radius:8px;padding:8px 11px;margin:6px 0;font-size:13px}}
+@media (max-width: 768px){{.sg-row{{grid-template-columns:repeat(2,minmax(0,1fr)) !important}}
+  .gs-row{{grid-template-columns:repeat(2,minmax(0,1fr)) !important}} .hz{{grid-template-columns:1fr !important}}
+  .ev td:nth-child(4), .ev th:nth-child(4){{display:none}} .concl td:first-child{{width:110px}}}}
+
 /* ---------- phone */
 @media (max-width: 768px) {{
   html, body, [data-testid="stAppViewContainer"] {{font-size:15px}}
@@ -290,7 +329,8 @@ a{{color:{accent}}}
   .chip.muted{{display:none}}
   .tape{{margin:0 0 10px}}
   [class*="st-key-pnl_"]{{padding:10px 12px 12px !important}}
-  .panel-h{{margin:-10px -12px 4px;padding:9px 12px 8px}}
+  .panel-h{{margin:-10px -12px 4px;padding:9px 12px 8px;flex-wrap:wrap;row-gap:2px}}
+  .panel-h .sub{{margin-left:0;width:100%;text-align:left;font-size:10.5px}}
   .stTabs [data-baseweb="tab-list"]{{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;gap:2px}}
   .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar{{display:none}}
   .stTabs [data-baseweb="tab"]{{padding:7px 10px;font-size:13.5px;white-space:nowrap;flex:0 0 auto}}

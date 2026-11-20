@@ -100,7 +100,7 @@ def trend_group(x, mtf=None):
     for a, b, lab in ((9, 20, "EMA 9/20"), (20, 50, "EMA 20/50"), (50, 200, "EMA 50/200")):
         dir_, age = _cross(x[f"E{a}"], x[f"E{b}"], 250 if b == 200 else 60)
         name = {1: "golden cross" if b == 200 else "bullish cross", -1: "death cross" if b == 200 else "bearish cross"}
-        items.append(_info(f"{lab} cross", "", "none in range" if not dir_ else f"{name[dir_]} {age} bars ago"))
+        items.append(_info(f"{lab} cross", "", "none in range" if not dir_ else f"{name[dir_]} {age} bar{'' if age == 1 else 's'} ago"))
     if _ok(last["E9"], last["E100"]):
         items.append(_info("EMA 9 / EMA 100", f"{_f(last['E9'])} / {_f(last['E100'])}",
                            f"price {'above' if c > last['E9'] else 'below'} EMA9, "

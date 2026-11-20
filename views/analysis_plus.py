@@ -55,35 +55,11 @@ def _items_table(items):
             + "".join(rows) + "</table>")
 
 
-CSS = """<style>
-.sg-row{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}}
-.sg{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 14px}}
-.sg-t{{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:{muted}}}
-.sg-v{{font-family:SF Mono,ui-monospace,Menlo,Consolas,monospace;font-size:26px;font-weight:700;margin-top:4px}}
-.sg-v span{{font-size:12px;color:{muted};margin-left:3px}}
-.sg-s{{font-size:12px;color:{muted};margin-top:5px;line-height:1.4}}
-.bar{{height:6px;background:{card2};border-radius:4px;overflow:hidden;margin-top:6px}}
-.bar i{{display:block;height:100%;border-radius:4px}}
-.gs-row{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}}
-.ev{{width:100%;border-collapse:collapse;font-size:12.5px}}
-.ev th{{text-align:left;color:{muted};font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-  padding:6px 8px;border-bottom:1px solid {border}}}
-.ev td{{padding:7px 8px;border-bottom:1px solid {border};vertical-align:top}}
-.ev tr:last-child td{{border-bottom:none}}
-.concl{{width:100%;border-collapse:collapse;font-size:13px}}
-.concl td{{padding:7px 8px;border-bottom:1px solid {border};vertical-align:top;line-height:1.5}}
-.concl td:first-child{{color:{muted};width:190px;font-weight:600}}
-.hz{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
-.hz > div{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 14px}}
-.op{{border:1px solid {border};border-left:3px solid {accent};border-radius:8px;padding:8px 11px;margin:6px 0;font-size:13px}}
-@media (max-width:768px){{.sg-row{{grid-template-columns:repeat(2,minmax(0,1fr)) !important}}
-  .gs-row{{grid-template-columns:repeat(2,minmax(0,1fr)) !important}} .hz{{grid-template-columns:1fr !important}}
-  .ev td:nth-child(4), .ev th:nth-child(4){{display:none}} .concl td:first-child{{width:110px}}}}
-</style>"""
+CSS = ""  # moved into ui.CSS so every page shares these styles
 
 
 def inject():
-    st.markdown(CSS.format(**P), unsafe_allow_html=True)
+    """Kept for compatibility: the styles now live in ui.CSS."""
 
 
 # ============================================================================

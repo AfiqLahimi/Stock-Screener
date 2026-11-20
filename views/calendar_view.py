@@ -66,8 +66,18 @@ def render(C):
                             f"<td style='white-space:nowrap'>{when}</td><td><b>{display_name(r['ticker'])}</b>"
                             f"{' <span class=chip>held</span>' if r['ticker'] in held else ''}</td>"
                             f"<td>{ICON[r['event']]} {r['event']}<div class='muted' style='font-size:11.5px'>{note}</div></td></tr>")
-            st.markdown("<table class='ev'><tr><th>Date</th><th></th><th>Stock</th><th>Event</th></tr>" +
-                        "".join(rows) + "</table>", unsafe_allow_html=True)
+            if C.mobile:
+                cards = []
+                for _, r in up.iterrows():
+                    days = (r["date"] - today).days
+                    when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+                    cards.append(f"<div class='op'><span class='mono'>{r['date']:%a %d %b}</span> · {when}<br>"
+                                 f"<b>{display_name(r['ticker'])}</b>{' <span class=chip>held</span>' if r['ticker'] in held else ''}"
+                                 f" · {ICON[r['event']]} {r['event']}</div>")
+                st.markdown("".join(cards), unsafe_allow_html=True)
+            else:
+                st.markdown("<table class='ev'><tr><th>Date</th><th></th><th>Stock</th><th>Event</th></tr>" +
+                            "".join(rows) + "</table>", unsafe_allow_html=True)
             recent = evdf[(evdf["date"] < today) & (evdf["date"] >= today - pd.Timedelta(days=14))]
             if len(recent):
                 st.caption("Last 14 days: " + " · ".join(f"{display_name(r.ticker)} {r.event.lower()} {r.date:%d %b}"
@@ -144,7 +154,7 @@ def intelligence(wl, evdf, today):
                                                                                          "EMA 20/50 bearish cross"))):
             dir_, age = rd[f"{base} dir"], rd[f"{base} age"]
             if dir_ and age is not None and age == age and age <= 3:
-                alerts.append((2, "✨" if dir_ > 0 else "💀", n, f"{lab[0] if dir_ > 0 else lab[1]} {int(age)} bars ago"))
+                alerts.append((2, "✨" if dir_ > 0 else "💀", n, f"{lab[0] if dir_ > 0 else lab[1]} {int(age)} bar{'' if int(age) == 1 else 's'} ago"))
         dir_, age = rd["X MACD dir"], rd["X MACD age"]
         if dir_ and age is not None and age == age and age <= 1:
             alerts.append((1, "〽️", n, f"MACD crossed {'above' if dir_ > 0 else 'below'} its signal"))

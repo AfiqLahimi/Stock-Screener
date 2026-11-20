@@ -124,9 +124,14 @@ def render(C):
         bt_df, bt_m = ta_plus.walk_forward(d["Close"].values, fc["horizon"], fc["lookback"])
 
         F = score_factors(d, sup, res)
-        tech = engine.assess(d, sup, res, mtf=mtf, patterns=learn.detect_patterns(d, 3), weights=AP.tech_weights())
-        hz = engine.horizons(tech["x"])
-        ops = engine.opportunities(tech["x"], sup, res, tech)
+        try:
+            tech = engine.assess(d, sup, res, mtf=mtf, patterns=learn.detect_patterns(d, 3), weights=AP.tech_weights())
+            hz = engine.horizons(tech["x"])
+            ops = engine.opportunities(tech["x"], sup, res, tech)
+        except Exception as e:  # noqa: BLE001 - the classic analysis below must still show
+            tech, hz, ops = None, [], []
+            st.warning(f"The extended technical engine couldn't run on this data ({type(e).__name__}); the classic "
+                       "analysis is still shown.")
         AP.inject()
         tabs = st.tabs(["🧠 Summary", "🧭 Scorecard", "📐 Indicators", "🏦 Fundamentals", "🧮 Audit", "📋 Trade plan",
                         "⏱️ Timeframes", "📊 Volume", "📈 ADX", "🕯️ Patterns", "🎯 Forecast", "📏 Levels", "🧾 Data"])
@@ -327,11 +332,17 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
 
         # ================= Signal audit
         # ================= Scorecard / Indicators / Fundamentals (Phase 5)
-        with tabs[1]:
-            AP.render_scorecard(ticker, tech, plan, sup, res, hz, ops, price, MOBILE)
-        with tabs[2]:
-            AP.render_indicators(ticker, display_name(ticker), d, tech, interval, MOBILE)
-        with tabs[3]:
+        with tabs[1], ui.guard("The scorecard"):
+            if tech is None:
+                st.info("Scorecard N/A for this data.")
+            else:
+                AP.render_scorecard(ticker, tech, plan, sup, res, hz, ops, price, MOBILE)
+        with tabs[2], ui.guard("The indicator view"):
+            if tech is None:
+                st.info("Indicator view N/A for this data.")
+            else:
+                AP.render_indicators(ticker, display_name(ticker), d, tech, interval, MOBILE)
+        with tabs[3], ui.guard("The fundamentals"):
             AP.render_fundamentals(ticker, price, MOBILE)
 
         with tabs[4]:
@@ -717,7 +728,9 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
 
         # ================= Forecast & accuracy
         with tabs[10]:
-            AP.render_horizons(hz, ops, tech['x'])
+            if tech is not None:
+                with ui.guard("The horizon assessment"):
+                    AP.render_horizons(hz, ops, tech['x'])
             # ---- Forecast
             h = fc["horizon"]
             unit_short = unit.split()[-1]

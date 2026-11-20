@@ -32,7 +32,8 @@ C = types.SimpleNamespace()   # shared context handed to every page
 
 def _page(fn, title, icon, path, default=False):
     def run():
-        fn(C)
+        with ui.guard(f"The {title} page"):
+            fn(C)
     run.__name__ = path
     return st.Page(run, title=title, icon=icon, url_path=path, default=default)
 

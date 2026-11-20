@@ -47,7 +47,7 @@ def _demo(ticker):
     return {"info": info, "income": inc, "balance": bal, "cashflow": cf, "dividends": divs}
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=150)
 def load(ticker: str) -> dict:
     if DEMO:
         return _demo(ticker)

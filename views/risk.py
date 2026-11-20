@@ -113,6 +113,7 @@ def render(C):
     with ui.panel("Holdings risk", "share of risk = how much each holding adds to total portfolio swings"):
         cc = st.column_config
         st.dataframe(tbl, hide_index=True, width="stretch", height="content",
+                     column_order=["Name", "Weight %", "Share of risk %", "Volatility %"] if C.mobile else None,
                      column_config={"Weight %": cc.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
                                     "Volatility %": cc.NumberColumn(format="%.1f%%"),
                                     "Beta (own index)": cc.NumberColumn(format="%.2f"),

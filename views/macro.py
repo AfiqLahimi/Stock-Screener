@@ -9,7 +9,7 @@ import indicators as ind
 import research as R
 import ui
 from core import P, load_one, pill
-from views.dashboard import index_stats, spark
+from views.dashboard import index_stats, prefetch, spark
 
 YIELDS = [("^IRX", "US 3-month"), ("^FVX", "US 5-year"), ("^TNX", "US 10-year"), ("^TYX", "US 30-year")]
 FX = [("MYR=X", "USD / MYR"), ("SGDMYR=X", "SGD / MYR"), ("EURMYR=X", "EUR / MYR"), ("CNYMYR=X", "CNY / MYR"),
@@ -35,10 +35,10 @@ def regime(t, name):
             "pct": pct, "e50": float(e50.iloc[-1]), "e200": float(e200.iloc[-1]), "last": last}
 
 
-def _table(items, fmt="{:,.2f}"):
+def _table(items, fmt="{:,.2f}", pre=None):
     rows = []
     for t, name in items:
-        s = index_stats(t)
+        s = index_stats(t, pre)
         if s is None:
             rows.append(f"<tr><td><b>{name}</b></td><td colspan=5 class='muted'>N/A</td></tr>")
             continue
@@ -54,12 +54,13 @@ def _table(items, fmt="{:,.2f}"):
 
 
 def render(C):
+    pre = prefetch([t for t, _ in YIELDS + FX + CMD] + ["^VIX", "^KLSE", "^GSPC"])
     st.markdown("<style>.ev .spark{width:100%;height:22px}.ev td:first-child{white-space:nowrap}"
                 ".note{margin-bottom:8px}</style>", unsafe_allow_html=True)
     # ---------------------------------------------------------------- regime
     with ui.panel("Market regime", "trend (EMA 50/200) × volatility (20-day, vs its last year)"):
         cols = st.columns(2) if not C.mobile else [st.container(), st.container()]
-        vix = index_stats("^VIX")
+        vix = index_stats("^VIX", pre)
         for col, (t, name) in zip(cols, (("^KLSE", "FBM KLCI"), ("^GSPC", "S&P 500"))):
             r = regime(t, name)
             with col:
@@ -89,8 +90,8 @@ def render(C):
                     + ("N/A (Bank Negara API didn't respond)" if not opr else
                        f"{opr['rate']:.2f}% <span class='muted'>· last change {opr['change']:+.2f} on {opr['date']}</span>")
                     + "</td></tr></table>", unsafe_allow_html=True)
-        st.markdown(_table(YIELDS, "{:.2f}%"), unsafe_allow_html=True)
-        y3, y10 = index_stats("^IRX"), index_stats("^TNX")
+        st.markdown(_table(YIELDS, "{:.2f}%", pre), unsafe_allow_html=True)
+        y3, y10 = index_stats("^IRX", pre), index_stats("^TNX", pre)
         if y3 and y10:
             spr = y10["last"] - y3["last"]
             st.markdown(f"<div class='note'>10-year minus 3-month: <b class='mono'>{spr:+.2f}%</b> · " +
@@ -100,12 +101,12 @@ def render(C):
                    "to strengthen the dollar and pressure emerging-market stocks.")
     # ---------------------------------------------------------------- fx
     with b, ui.panel("Currencies", "how many ringgit per unit"):
-        st.markdown(_table(FX, "{:,.4f}"), unsafe_allow_html=True)
+        st.markdown(_table(FX, "{:,.4f}", pre), unsafe_allow_html=True)
         st.caption("USD/MYR going up = ringgit weaker. A weaker ringgit helps exporters (gloves, tech, plantations) "
                    "and hurts importers and companies with US-dollar debt.")
     c, d = st.columns(2) if not C.mobile else (st.container(), st.container())
     with c, ui.panel("Commodities", "futures, US$"):
-        st.markdown(_table(CMD), unsafe_allow_html=True)
+        st.markdown(_table(CMD, pre=pre), unsafe_allow_html=True)
         st.caption("Crude oil matters for Malaysia's O&G stocks and government revenue. Crude palm oil futures (FCPO) "
                    "are traded on Bursa but aren't available from Yahoo, so they're not shown.")
     # ---------------------------------------------------------------- US macro

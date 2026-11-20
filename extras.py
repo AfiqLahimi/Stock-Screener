@@ -89,13 +89,13 @@ def _fetch_div(ticker):
     return ticker, out
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=300)
 def load_dividends(tickers: tuple) -> dict:
     with ThreadPoolExecutor(max_workers=6) as ex:
         return dict(ex.map(_fetch_div, tickers))
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner=False)
+@st.cache_data(ttl=12 * 3600, show_spinner=False, max_entries=300)
 def load_payout_ratio(ticker):
     if DEMO:
         return float(np.random.default_rng(abs(hash(ticker)) % 2**32).uniform(0.3, 0.9))

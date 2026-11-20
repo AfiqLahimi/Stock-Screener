@@ -15,8 +15,8 @@ import streamlit as st
 import extras
 import terminal
 import ui
-from core import (DEMO, P, US, add_indicators, adx_regime, display_name, load_bursa_snapshot, load_one, pill,
-                  scan_universe)
+from core import (DEMO, P, US, add_indicators, adx_regime, display_name, get_many, load_bursa_snapshot, load_one,
+                  pill, scan_universe)
 
 OVERVIEW = [("^KLSE", "FBM KLCI"), ("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"), ("^DJI", "Dow Jones"),
             ("MYR=X", "USD/MYR"), ("GC=F", "Gold"), ("CL=F", "Crude oil"), ("^VIX", "VIX")]
@@ -28,9 +28,19 @@ MIN_VALUE = 100_000          # RM traded per day: below this a "top gainer" is u
 # ============================================================================
 # Data
 # ============================================================================
-def index_stats(t):
+def prefetch(tickers):
+    """One batched Yahoo request for many symbols (instead of one request each)."""
+    try:
+        return get_many(tuple(tickers), "1d", "2y")
+    except Exception:
+        return {}
+
+
+def index_stats(t, pre=None):
     """Level, changes over several windows, trend vs EMAs and ADX regime for one index/asset."""
-    d = load_one(t, "1d", "2y")
+    d = (pre or {}).get(t)
+    if d is None or d.empty:
+        d = load_one(t, "1d", "2y")
     if d is None or d.empty or len(d) < 2:
         return None
     c = d["Close"]
@@ -162,7 +172,8 @@ def render(C):
                "Click any row to open the stock in Analysis. Prices from Yahoo Finance (Bursa ~15 min delayed).")
 
     # ------------------------------------------------------------ A. overview
-    stats = {t: index_stats(t) for t, _ in OVERVIEW}
+    pre = prefetch([t for t, _ in OVERVIEW])
+    stats = {t: index_stats(t, pre) for t, _ in OVERVIEW}
     cards = []
     for t, name in OVERVIEW:
         s = stats[t]
@@ -227,12 +238,12 @@ def render(C):
         st.caption("Trend: price vs 50- and 200-day EMAs and whether the 50 is above the 200 (3 of 3 = Uptrend). "
                    "ADX regime: trend strength (see Learn).")
 
-    with right, ui.panel("Market pulse", "Bursa" if is_bursa else "your list"):
+    with right, ui.panel("Market pulse", "Bursa" if is_bursa else "your list"), ui.guard("Market pulse"):
         pulse(scan, liq if is_bursa else pd.DataFrame(), stats.get("^KLSE" if is_bursa else "^GSPC"),
               "FBM KLCI" if is_bursa else "S&P 500", snap)
 
     # ------------------------------------------------------------ A. movers
-    with ui.panel("Top movers", f"today · Bursa snapshot {_asof(snap)}"):
+    with ui.panel("Top movers", f"today · Bursa snapshot {_asof(snap)}"), ui.guard("Top movers"):
         tb, tu = st.tabs(["🇲🇾 Bursa", "🇺🇸 US"])
         with tb:
             if liq.empty:
@@ -265,7 +276,7 @@ def render(C):
 
     # ------------------------------------------------------------ B. sectors | news
     sc_col, nw_col = (st.container(), st.container()) if mob else st.columns([1, 1], gap="small")
-    with sc_col, ui.panel("Bursa sectors", "today · market-cap weighted"):
+    with sc_col, ui.panel("Bursa sectors", "today · market-cap weighted"), ui.guard("Sector performance"):
         if liq.empty:
             st.info("Sector performance N/A right now.")
         else:
@@ -274,7 +285,7 @@ def render(C):
             st.caption("Average of today's % change per Yahoo sector, weighted by market cap (liquid stocks only). "
                        "Number in brackets = stocks counted.")
             st.button("🗺️ Open the full heatmap", on_click=ui.goto, args=("heatmap",), key="db_hm")
-    with nw_col, ui.panel("Market news", "Google News"):
+    with nw_col, ui.panel("Market news", "Google News"), ui.guard("News"):
         n1, n2 = st.tabs(["🇲🇾 Bursa / Malaysia", "🇺🇸 US markets"])
         with n1:
             news_list(load_news('("Bursa Malaysia" OR KLCI OR "Bursa stocks") when:3d', "en-MY", "MY"))
@@ -282,11 +293,12 @@ def render(C):
             news_list(load_news('("stock market" OR "Wall Street" OR "S&P 500") when:2d', "en-US", "US"))
 
     # ------------------------------------------------------------ C. watchlist
-    with ui.panel("Watchlist", "shared with the Terminal"):
+    with ui.panel("Watchlist", "shared with the Terminal"), ui.guard("Watchlist"):
         watchlist(C)
 
     # ------------------------------------------------------------ D. opportunities
-    with ui.panel("Trading opportunities", f"daily candles · {len(scan)} stocks from the sidebar universe"):
+    with ui.panel("Trading opportunities", f"daily candles · {len(scan)} stocks from the sidebar universe"), \
+            ui.guard("Trading opportunities"):
         opportunities(scan, mob)
 
 

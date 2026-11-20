@@ -78,7 +78,7 @@ def browser_sync():
         return
     acct = st.session_state.get("pt_acct")
     if not st.session_state.get("pt_from_disk") and not st.session_state.get("pt_ls_checked"):
-        raw = streamlit_js_eval(js_expressions=f"localStorage.getItem('{LS_KEY}')", key="pt_ls_get")
+        raw = streamlit_js_eval(js_expressions=f"localStorage.getItem('{LS_KEY}') || ''", key="pt_ls_get")
         if raw is not None:
             st.session_state["pt_ls_checked"] = True
             try:
@@ -121,7 +121,7 @@ def _demo_px(t):
                         index=idx)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=150)
 def daily(ticker):
     if DEMO:
         return _demo_px(ticker)

@@ -15,7 +15,7 @@ RANGES = {"3M": 63, "6M": 126, "1Y": 252, "2Y": 504, "5Y": 1260}
 LINE_COLS = ["#7b93f5", "#3fb68b", "#e3a34b", "#e88ad1"]
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=80)
 def profile(t, tw, fw):
     df = load_one(t, "1d", "2y")
     out = {"ticker": t}
@@ -40,7 +40,8 @@ def render(C):
     wl = st.session_state.get("term_stocks", [])
     default = [t for t in wl if not t.startswith("^")][:3] or ["1155.KL", "1295.KL", "1023.KL"]
     c1, c2 = st.columns([3, 1.2]) if not C.mobile else (st.container(), st.container())
-    syms = c1.multiselect("Stocks to compare (2–4)", C.all_symbols(), max_selections=4, key="cmp_syms",
+    opts = list(dict.fromkeys(default + list(st.session_state.get("cmp_syms") or []) + C.all_symbols()))
+    syms = c1.multiselect("Stocks to compare (2–4)", opts, max_selections=4, key="cmp_syms",
                           format_func=lambda t: f"{display_name(t)} · {t}",
                           **({} if "cmp_syms" in st.session_state else {"default": default}))
     rng = c2.segmented_control("Period", list(RANGES), default="1Y", key="cmp_rng") or "1Y"

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from core import load_one
+from core import get_many, load_one
 
 DEMO = os.environ.get("DEMO_DATA") == "1"
 TRADING_DAYS = 252
@@ -21,8 +21,14 @@ def benchmark_of(ticker):
 def closes(tickers, period="2y"):
     """Daily closes, one column per ticker, aligned on dates (each stock keeps its own trading days)."""
     cols = {}
+    try:
+        pre = get_many(tuple(tickers), "1d", period) if len(tickers) > 1 else {}
+    except Exception:
+        pre = {}
     for t in tickers:
-        d = load_one(t, "1d", period)
+        d = pre.get(t)
+        if d is None or d.empty:
+            d = load_one(t, "1d", period)
         if d is not None and not d.empty:
             s = d["Close"].copy()
             s.index = pd.to_datetime(s.index).normalize()
@@ -78,7 +84,7 @@ def hist_var(r, level=0.95):
 # ============================================================================
 # Events (earnings / dividends)
 # ============================================================================
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=300)
 def events(ticker):
     """Next earnings date and dividend dates from Yahoo's calendar (None when not published)."""
     if DEMO:
