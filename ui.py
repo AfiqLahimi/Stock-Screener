@@ -16,7 +16,7 @@ import re
 
 # Widget values that should survive switching pages. Only plain input widgets are listed: buttons, uploaders and
 # table selections are read-only in Streamlit and must never be re-assigned.
-_KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_filter|ts_[a-z]+"
+_KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_(filter|c_[a-z0-9]+|mode|cols)|ts_[a-z]+"
                    r"|term_(add|search|rng|ema|engine|cat|filter|layout|h|ov|pn|type)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"

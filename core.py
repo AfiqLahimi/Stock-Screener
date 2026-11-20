@@ -13,6 +13,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
+import indicators as ind
+
 
 
 DEMO = os.environ.get("DEMO_DATA") == "1"  # for testing without internet
@@ -1217,10 +1219,25 @@ def stock_view(ticker, tf="1D"):
 # ----------------------------------------------------------------------------
 # Universe scan (shared by Screener, Dashboard and others)
 # ----------------------------------------------------------------------------
+def _cross(fast, slow, look=60):
+    """(direction, bars ago) of the most recent cross of fast over slow within `look` bars, else (0, None).
+    direction +1 = fast crossed above slow (bullish), -1 = crossed below."""
+    diff = (fast - slow).dropna().tail(look + 1)
+    sg = np.sign(diff.values)
+    for i in range(len(sg) - 1, 0, -1):
+        if sg[i] != 0 and sg[i - 1] != 0 and sg[i] != sg[i - 1]:
+            return int(sg[i]), len(sg) - 1 - i
+    return 0, None
+
+
+def _above(a, b):
+    return None if pd.isna(a) or pd.isna(b) else bool(a > b)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.DataFrame:
-    """Analyse every stock in the universe once. Columns used by the Screener table come first;
-    the extra ones (prefixed with an underscore or listed in SCAN_EXTRA) feed the Dashboard."""
+    """Analyse every stock in the universe once (shared by Screener, Dashboard, watchlists).
+    All values use completed history only; anything inside an indicator's warm-up is None (shown as N/A)."""
     data = get_many(universe, interval, period)
     rows = []
     for t, df in data.items():
@@ -1228,8 +1245,18 @@ def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.
             d, sup, res, sc, label, _ = analyse(df)
             p = trade_plan(d, sup, res, label, unit)
             last, prev = d.iloc[-1], d.iloc[-2]
+            c = d["Close"]
             price = float(last["Close"])
-            c20 = float(d["Close"].iloc[-21]) if len(d) > 21 else np.nan
+            e9, e20, e50, e200 = ind.ema(c, 9), ind.ema(c, 20), ind.ema(c, 50), ind.ema(c, 200)
+            x920, x2050, x50200 = _cross(e9, e20), _cross(e20, e50), _cross(e50, e200, 250)
+            xm = _cross(d["MACD"], d["MACDsig"])
+            k, _d = ind.stochastic(d["High"], d["Low"], c)
+
+            def ret(n):
+                return (price / float(c.iloc[-1 - n]) - 1) * 100 if len(c) > n and c.iloc[-1 - n] else None
+            hi252 = float(d["High"].iloc[-253:-1].max()) if len(d) >= 120 else None
+            lo252 = float(d["Low"].iloc[-253:-1].min()) if len(d) >= 120 else None
+            vavg = float(d["VolAvg20"].iloc[-1]) if pd.notna(d["VolAvg20"].iloc[-1]) else None
             rows.append({
                 "Name": display_name(t), "Ticker": t, "Price": price,
                 "Change %": (price / float(prev["Close"]) - 1) * 100,
@@ -1242,21 +1269,34 @@ def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.
                 "To support %": (price / sup[0][0] - 1) * 100,
                 "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
                 "Stop": p["stop"], "Target": p["t1"], "R:R": p["rr1"],
-                # extras (not shown in the Screener table)
+                # ---- extras (Dashboard + advanced Screener)
                 "To resistance %": (res[0][0] / price - 1) * 100,
                 "Volume": float(last["Volume"]) if pd.notna(last["Volume"]) else None,
-                "Return 20 %": (price / c20 - 1) * 100 if c20 == c20 and c20 else None,
-                "Above EMA50": bool(price > last["EMA50"]) if len(d) >= 50 else None,
-                "Above EMA200": bool(price > last["EMA200"]) if len(d) >= 200 else None,
+                "Avg value": price * vavg if vavg else None,
+                "Return 5 %": ret(5), "Return 20 %": ret(20), "Return 60 %": ret(60),
+                "Above EMA20": _above(price, e20.iloc[-1]), "Above EMA50": _above(price, e50.iloc[-1]),
+                "Above EMA200": _above(price, e200.iloc[-1]),
+                "EMA9>20": _above(e9.iloc[-1], e20.iloc[-1]), "EMA20>50": _above(e20.iloc[-1], e50.iloc[-1]),
+                "EMA50>200": _above(e50.iloc[-1], e200.iloc[-1]),
+                "X 9/20 dir": x920[0], "X 9/20 age": x920[1], "X 20/50 dir": x2050[0], "X 20/50 age": x2050[1],
+                "X 50/200 dir": x50200[0], "X 50/200 age": x50200[1],
+                "MACD>signal": _above(last["MACD"], last["MACDsig"]),
+                "MACD hist rising": bool(last["MACDhist"] > prev["MACDhist"]),
+                "X MACD dir": xm[0], "X MACD age": xm[1], "MACD hist": float(last["MACDhist"]),
+                "+DI>-DI": _above(last["PDI"], last["MDI"]),
+                "ATR %": float(last["ATR"]) / price * 100 if price else None,
+                "Stoch %K": float(k.iloc[-1]) if pd.notna(k.iloc[-1]) else None,
+                "From 52w high %": (price / hi252 - 1) * 100 if hi252 else None,
+                "From 52w low %": (price / lo252 - 1) * 100 if lo252 else None,
+                "New 52w high": bool(hi252 and price > hi252),
                 "Breakout": bool(pd.notna(last["HH20"]) and price > last["HH20"]),
                 "Breakdown": bool(pd.notna(last["LL20"]) and price < last["LL20"]),
-                "MACD hist": float(last["MACDhist"]),
             })
         except Exception:
             continue
     return pd.DataFrame(rows)
 
 
-SCAN_EXTRA = ["To resistance %", "Volume", "Return 20 %", "Above EMA50", "Above EMA200", "Breakout", "Breakdown",
-              "MACD hist"]
+SCAN_BASE = ["Name", "Ticker", "Price", "Change %", "Signal", "_label", "Score", "RSI", "RVOL", "ADX", "Trend (ADX)",
+             "Support", "Resistance", "To support %", "Buy zone", "Stop", "Target", "R:R"]
 

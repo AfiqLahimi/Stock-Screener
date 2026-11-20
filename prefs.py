@@ -1,4 +1,4 @@
-"""Small user preferences that should survive closing the browser: the watchlist and favourites.
+"""Small user preferences that should survive closing the browser: watchlist, favourites and saved screens.
 
 Saved on the app server (data/prefs.json) and mirrored to this browser's local storage, so they come back
 after the server restarts (Streamlit Cloud wipes server files on restart/redeploy)."""
@@ -19,13 +19,15 @@ DEFAULT_WATCH = ["1155.KL", "5347.KL", "5398.KL", "1023.KL", "AAPL", "NVDA", "TS
 
 def _snapshot():
     return {"watchlist": list(st.session_state.get("term_stocks", [])),
-            "favourites": sorted(set(st.session_state.get("term_fav", [])))}
+            "favourites": sorted(set(st.session_state.get("term_fav", []))),
+            "screens": dict(st.session_state.get("scr_saved", {}))}
 
 
 def _apply(data):
     wl = [t for t in data.get("watchlist", []) if isinstance(t, str)]
     st.session_state["term_stocks"] = wl or DEFAULT_WATCH.copy()
     st.session_state["term_fav"] = [t for t in data.get("favourites", []) if isinstance(t, str)]
+    st.session_state["scr_saved"] = data.get("screens", {}) if isinstance(data.get("screens"), dict) else {}
     st.session_state["_prefs_saved"] = json.dumps(_snapshot())
 
 
