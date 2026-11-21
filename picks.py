@@ -1,4 +1,5 @@
 """Picks tab: ranked buy / sell ideas for short-term trading and long-term investing."""
+from pxfmt import fp, pxf  # noqa: F401
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -41,11 +42,11 @@ def short_term(t, df, analyse, trade_plan, detect_patterns):
     if bear_pat:
         sell_reasons.insert(0, f"Bearish candle: {bear_pat}")
     if rsi > 70 and near_res:
-        sell_reasons.insert(0, f"Overbought (RSI {rsi:.0f}) right under resistance {res[0][0]:.3f}")
+        sell_reasons.insert(0, f"Overbought (RSI {rsi:.0f}) right under resistance {fp(res[0][0])}")
 
     return {
         "Ticker": t, "Price": price, "Signal": label, "Score": sc, "Setup": round(q, 1), "RSI": rsi,
-        "Buy zone": f"{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}", "Stop": plan["stop"],
+        "Buy zone": f"{fp(plan['buy_lo'])} – {fp(plan['buy_hi'])}", "Stop": plan["stop"],
         "Target": plan["t1"], "R:R": rr, "In zone": in_zone, "Breakout": breakout,
         "Pattern": bull_pat or bear_pat or "", "_buy": buy_ok, "_sell": sell_ok,
         "_why": reasons[:3], "_why_sell": sell_reasons[:3], "_action": plan["action"],
@@ -207,9 +208,9 @@ def render(universe, display_name, P, pill, get_many, analyse, trade_plan, add_i
             if buys.empty:
                 st.info("No strong buy setups right now. That's normal: waiting is also a position.")
             for _, r in buys.iterrows():
-                body = (f"Price <b>{r['Price']:.3f}</b> · buy zone <b>{r['Buy zone']}</b> · stop "
-                        f"<b style='color:{P['warn']}'>{r['Stop']:.3f}</b> · target "
-                        f"<b style='color:{P['up']}'>{r['Target']:.3f}</b> · R:R <b>1:{r['R:R']:.1f}</b>")
+                body = (f"Price <b>{fp(r['Price'])}</b> · buy zone <b>{r['Buy zone']}</b> · stop "
+                        f"<b style='color:{P['warn']}'>{fp(r['Stop'])}</b> · target "
+                        f"<b style='color:{P['up']}'>{fp(r['Target'])}</b> · R:R <b>1:{r['R:R']:.1f}</b>")
                 st.markdown(_card(r, P, pill, P["up"], f"{r['Signal']} · {r['Score']:+d}", r["_why"], body),
                             unsafe_allow_html=True)
         with right:
@@ -217,8 +218,8 @@ def render(universe, display_name, P, pill, get_many, analyse, trade_plan, add_i
             if sells.empty:
                 st.info("No strong sell signals right now.")
             for _, r in sells.iterrows():
-                body = (f"Price <b>{r['Price']:.3f}</b> · RSI <b>{r['RSI']:.0f}</b> · "
-                        f"cut below <b style='color:{P['warn']}'>{r['Stop']:.3f}</b>")
+                body = (f"Price <b>{fp(r['Price'])}</b> · RSI <b>{r['RSI']:.0f}</b> · "
+                        f"cut below <b style='color:{P['warn']}'>{fp(r['Stop'])}</b>")
                 st.markdown(_card(r, P, pill, P["down"], f"{r['Signal']} · {r['Score']:+d}", r["_why_sell"], body),
                             unsafe_allow_html=True)
         table = df.sort_values("Setup", ascending=False)[
@@ -235,7 +236,7 @@ def render(universe, display_name, P, pill, get_many, analyse, trade_plan, add_i
         sells = df[df["Score"] <= -20].sort_values("Score", ascending=True).head(top_n)
 
         def lt_body(r):
-            bits = [f"Price <b>{r['Price']:.3f}</b>"]
+            bits = [f"Price <b>{fp(r['Price'])}</b>"]
             if r["1y %"] is not None and not pd.isna(r["1y %"]):
                 col = P["up"] if r["1y %"] >= 0 else P["down"]
                 bits.append(f"1y <b style='color:{col}'>{r['1y %']:+.0f}%</b>")

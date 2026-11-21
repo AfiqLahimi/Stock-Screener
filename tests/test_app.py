@@ -6,7 +6,7 @@ from streamlit.testing.v1 import AppTest
 
 import core
 
-PAGES = ["dashboard", "macro", "commodities", "heatmap", "screener", "analysis", "compare", "picks", "notes", "portfolio",
+PAGES = ["dashboard", "macro", "commodities", "crypto", "heatmap", "screener", "analysis", "compare", "picks", "notes", "portfolio",
          "risk", "terminal", "multichart", "paper", "tradingview", "calendar", "dividends", "ipo", "learn"]
 APP = core.__file__.replace("core.py", "app.py")
 
@@ -49,6 +49,8 @@ def awkward(monkeypatch):
             d["Volume"] = 0.0
         elif ticker == "9997.KL":                     # fresh listing
             d = d.tail(45)
+        elif ticker.startswith("SHIB"):              # crypto with a tiny price
+            d[["Open", "High", "Low", "Close"]] *= 1e-6
         elif ticker.startswith("^") or ticker.endswith("=X"):
             d["Volume"] = 0.0
         if interval in ("1h", "15m"):
@@ -79,7 +81,7 @@ def test_pages_with_awkward_data(awkward):
             bad[p] = _problems(at)
     at.session_state["_goto"] = "analysis"
     at.run()
-    for t in ("9998.KL", "9997.KL", "^KLSE", "MYR=X", "NVDA"):
+    for t in ("9998.KL", "9997.KL", "^KLSE", "MYR=X", "NVDA", "BTC-USD", "SHIB-USD"):
         at.text_input(key="an_typed").set_value(t)
         at.run()
         if _problems(at):
@@ -97,4 +99,11 @@ def test_pages_with_awkward_data(awkward):
         at.run()
         if _problems(at):
             bad[f"terminal {r}"] = _problems(at)
+    at.session_state["_goto"] = "crypto"
+    at.run()
+    for t in ("SHIB", "pepe", "BINANCE:ETHUSDT"):
+        at.text_input(key="cr_typed").set_value(t)
+        at.run()
+        if _problems(at):
+            bad[f"crypto {t}"] = _problems(at)
     assert not bad

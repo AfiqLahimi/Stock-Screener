@@ -1,4 +1,5 @@
 """Analysis & Forecast page: full single-stock analysis."""
+from pxfmt import fp, pxf  # noqa: F401
 from core import *  # noqa: F401,F403
 import engine
 import learn
@@ -19,8 +20,10 @@ def render(C):
                            format_func=lambda v: f"{v} {unit.split()[-1]}")
     lookback = c4.selectbox("Trend based on", [30, 60, 120], index=1, format_func=lambda v: f"last {v} bars")
     ticker = normalise(typed) if typed.strip() else pick
+    if ticker and not ticker.endswith(".KL") and ticker.upper() in CRYPTO_ALIAS and ticker not in US:
+        ticker = CRYPTO_ALIAS[ticker.upper()]
     st.session_state["an_ticker"] = ticker
-    cur = "RM" if ticker.endswith(".KL") else "$"
+    cur = "RM" if ticker.endswith(".KL") else "US$" if is_crypto(ticker) else "$"
 
     with st.spinner(f"Fetching {ticker}..."):
         df_raw = load_one(ticker, interval, period)
@@ -52,7 +55,7 @@ def render(C):
         # ---- status badges (data integrity)
         badges = []
         if cstat["forming"]:
-            badges.append(pill(f"● Live candle forming · live {cur}{live_price:,.3f}"
+            badges.append(pill(f"● Live candle forming · live {cur}{fp(live_price, True)}"
                                + (" · signals use last completed candle" if closed_only else ""), P["warn"]))
         if cstat["stale"]:
             badges.append(pill("⚠ Data looks stale: check the symbol or try again later", P["down"]))
@@ -60,7 +63,7 @@ def render(C):
         st.markdown(f"""
 <div class="card"><div class="head">
   <div><div class="name">{display_name(ticker)} · {ticker}</div>
-       <div><span class="price">{price:,.3f}</span><span class="chg" style="color:{chg_col}">{chg:+.2f}%</span></div></div>
+       <div><span class="price">{fp(price, True)}</span><span class="chg" style="color:{chg_col}">{chg:+.2f}%</span></div></div>
   <div><div class="name">Signal</div>{pill(label, LABEL_COLOR[label])}</div>
   <div><div class="name">Score</div><div style="font-size:20px;font-weight:600">{sc:+d}<span class="muted"> / 100</span></div></div>
   <div><div class="name">Trend strength (ADX)</div>{pill(f"{ax['regime']} · {ax['adx']:.0f}", regime_color(ax['regime'])) if ax else pill("N/A", P['muted'])}</div>
@@ -169,14 +172,14 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                        P["down"] if "AVOID" in plan["action"] else P["warn"] if "DON'T" in plan["action"] else P["muted"])
             cards_k.append(kcard(
                 "📋 Trade plan", plan["action"].split(" ", 1)[1].title(), act_col,
-                [("Buy zone", f"{cur}{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}"),
-                 ("Reference entry", f"{cur}{plan['entry']:.3f}"),
-                 ("Stop loss", f"{cur}{plan['stop']:.3f} ({(plan['stop'] / plan['entry'] - 1) * 100:.1f}%)"),
-                 ("Target 1 / Target 2", f"{cur}{plan['t1']:.3f} / {cur}{plan['t2']:.3f}"),
+                [("Buy zone", f"{cur}{fp(plan['buy_lo'])} – {fp(plan['buy_hi'])}"),
+                 ("Reference entry", f"{cur}{fp(plan['entry'])}"),
+                 ("Stop loss", f"{cur}{fp(plan['stop'])} ({(plan['stop'] / plan['entry'] - 1) * 100:.1f}%)"),
+                 ("Target 1 / Target 2", f"{cur}{fp(plan['t1'])} / {cur}{fp(plan['t2'])}"),
                  ("Risk : Reward (T1)", rr_txt),
-                 ("Sell zone", f"{cur}{plan['sell_lo']:.3f} – {plan['sell_hi']:.3f}")],
-                f"Buy zone = nearest support {cur}{plan['s1']:.3f} ({sup[0][1] or 'projected'} touches) up to +0.5 ATR. "
-                f"Stop sits {plan['atr_mult']:g} × ATR ({cur}{plan['atr']:.3f}) below support so normal daily noise "
+                 ("Sell zone", f"{cur}{fp(plan['sell_lo'])} – {fp(plan['sell_hi'])}")],
+                f"Buy zone = nearest support {cur}{fp(plan['s1'])} ({sup[0][1] or 'projected'} touches) up to +0.5 ATR. "
+                f"Stop sits {plan['atr_mult']:g} × ATR ({cur}{fp(plan['atr'])}) below support so normal daily noise "
                 f"doesn't trigger it. Target 1 = nearest resistance ({res[0][1] or 'projected'} touches). "
                 f"R:R is {rr_q}."))
 
@@ -189,9 +192,9 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                       "weak" if bt_m else "untested")
             cards_k.append(kcard(
                 f"📈 Trend forecast · {fc['horizon']} {bar_word}s", f"{fc['arrow']} {fc['direction']}", fc_col,
-                [("Projected price", f"{cur}{fc['centre'][-1]:.3f} ({fc['total']:+.1f}%)"),
-                 ("Likely range (68%)", f"{cur}{fc['lo1'][-1]:.3f} – {fc['hi1'][-1]:.3f}"),
-                 ("Wide range (95%)", f"{cur}{fc['lo2'][-1]:.3f} – {fc['hi2'][-1]:.3f}"),
+                [("Projected price", f"{cur}{fp(fc['centre'][-1])} ({fc['total']:+.1f}%)"),
+                 ("Likely range (68%)", f"{cur}{fp(fc['lo1'][-1])} – {fp(fc['hi1'][-1])}"),
+                 ("Wide range (95%)", f"{cur}{fp(fc['lo2'][-1])} – {fp(fc['hi2'][-1])}"),
                  ("Trend fit R²", f"{fc['r2']:.2f} ({fc['strength'].lower()})"),
                  ("Momentum", fc["momentum"]),
                  ("Forecast track record", reliab)],
@@ -252,14 +255,14 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                     else "0 (stop too far for budget)"
                 cards_k.append(kcard(
                     "🌡️ Volatility & position size", f"{vol['cls']} volatility", vol_col,
-                    [("ATR (14)", f"{cur}{vol['atr']:.3f}"), ("ATR % of price", f"{vol['atrp']:.2f}%"),
+                    [("ATR (14)", f"{cur}{fp(vol['atr'])}"), ("ATR % of price", f"{vol['atrp']:.2f}%"),
                      ("Volatility rank", nz(vol["pct"], "{:.0f}th percentile")),
                      ("Risk budget", f"{cur}{ps_['budget']:,.2f}" if ps_ else "N/A"),
                      ("Position size", size_txt),
                      ("Required capital / max loss",
                       f"{cur}{ps_['cost']:,.0f} / {cur}{ps_['loss']:,.2f}" if sh_ else "–")],
                     f"Today's ATR% ranks {nz(vol['pct'], '{:.0f}')}th against this stock's last {vol['n']} candles. "
-                    f"Risk per share = entry {cur}{e_:.3f} − stop {cur}{s_:.3f} = {cur}{e_ - s_:.3f}; budget "
+                    f"Risk per share = entry {cur}{fp(e_)} − stop {cur}{fp(s_)} = {cur}{fp(e_ - s_)}; budget "
                     f"{cfg_s['risk_pct']:g}% of {cur}{cfg_s['capital']:,.0f} ÷ that, rounded down to "
                     f"{'100-share lots' if ticker.endswith('.KL') else 'whole shares'}, fees included. Change the "
                     f"settings in 📋 Trade plan."))
@@ -305,7 +308,7 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                     "🎯 Forecast accuracy (back-test)", f"{bt_m['dir_acc']:.0f}% direction", acc_col,
                     [("Forecasts tested", f"{bt_m['n']}"), ("Directional accuracy", f"{bt_m['dir_acc']:.0f}% "
                                                                                    f"(always-up {bt_m['up_rate']:.0f}%)"),
-                     ("MAE / RMSE", f"{cur}{bt_m['mae']:.3f} / {cur}{bt_m['rmse']:.3f} ({bt_m['mape']:.1f}%)"),
+                     ("MAE / RMSE", f"{cur}{fp(bt_m['mae'])} / {cur}{fp(bt_m['rmse'])} ({bt_m['mape']:.1f}%)"),
                      ("Skill vs 'no change'", f"{bt_m['skill']:+.0f}%"),
                      ("Band coverage 68% / 95%", f"{bt_m['cov68']:.0f}% / {bt_m['cov95']:.0f}%")],
                     f"Walk-forward test: at each past date the model saw only earlier data. Above 50% direction and "
@@ -344,17 +347,19 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                 st.info("Indicator view N/A for this data.")
             else:
                 AP.render_indicators(ticker, display_name(ticker), d, tech, interval, MOBILE)
+        crypto_note = ("N/A for crypto: a coin has no company accounts, earnings, valuation multiples or "
+                       "shareholders. Use the technical tabs (Summary, Scorecard, Indicators, Levels, Forecast…).")
         with tabs[3], ui.guard("The fundamentals"):
-            AP.render_fundamentals(ticker, price, MOBILE)
+            st.info(crypto_note) if is_crypto(ticker) else AP.render_fundamentals(ticker, price, MOBILE)
 
         with tabs[4], ui.guard("News & analysts"):
             RT.render_news_analysts(ticker, price, MOBILE)
         with tabs[5], ui.guard("Financials"):
-            RT.render_financials(ticker, C, MOBILE)
+            st.info(crypto_note) if is_crypto(ticker) else RT.render_financials(ticker, C, MOBILE)
         with tabs[6], ui.guard("The valuation"):
-            RT.render_valuation(ticker, price, MOBILE)
+            st.info(crypto_note) if is_crypto(ticker) else RT.render_valuation(ticker, price, MOBILE)
         with tabs[7], ui.guard("Ownership"):
-            RT.render_ownership(ticker, MOBILE)
+            st.info(crypto_note) if is_crypto(ticker) else RT.render_ownership(ticker, MOBILE)
         with tabs[8], ui.guard("Notes"):
             RT.render_notes(ticker, MOBILE)
 
@@ -445,12 +450,12 @@ comes from the data, nothing is invented). Not investment advice.</div></div>"""
                 st.markdown(f"""
 <div class="card"><h3>🌡️ Volatility (ATR 14)</h3>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
- <div><div class="muted">ATR (14)</div><div style="font-size:20px;font-weight:600">{cur}{vol['atr']:.3f}</div></div>
+ <div><div class="muted">ATR (14)</div><div style="font-size:20px;font-weight:600">{cur}{fp(vol['atr'])}</div></div>
  <div><div class="muted">ATR % of price</div><div style="font-size:20px;font-weight:600">{vol['atrp']:.2f}%</div></div>
  <div><div class="muted">Volatility</div>{pill(vol['cls'], vol_col)}<div class="muted" style="font-size:12px">
    {f"{vol['pct']:.0f}th percentile of last {vol['n']} candles" if vol['pct'] is not None else 'needs ≥ 60 candles'}</div></div>
- <div><div class="muted">ATR stop</div><div style="font-size:20px;font-weight:600">{cur}{stop:.3f}</div>
-   <div class="muted" style="font-size:12px">support {cur}{plan['s1']:.3f} − {atr_mult:g} × ATR</div></div>
+ <div><div class="muted">ATR stop</div><div style="font-size:20px;font-weight:600">{cur}{fp(stop)}</div>
+   <div class="muted" style="font-size:12px">support {cur}{fp(plan['s1'])} − {atr_mult:g} × ATR</div></div>
 </div>
 <div class="note">ATR = average size of one {bar_word}'s move (Wilder, 14). Classification compares today's ATR% with this
 stock's own last {vol['n']} candles: bottom third = Low, middle = Moderate, top third = High. Because the stop sits a fixed
@@ -477,11 +482,11 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                 lots_txt = f" ({sh // 100} lots)" if lot == 100 else ""
                 fb = ps["buy_fees"]["total"]
                 plan_rows = [
-                    ("Entry price (reference)", f"{cur}{entry:.3f}"),
-                    ("Buy zone", f"{cur}{buy_lo:.3f} – {cur}{buy_hi:.3f}"),
-                    ("Stop loss", f"{cur}{stop:.3f} ({(stop / entry - 1) * 100:.1f}%)"),
-                    ("Target 1", f"{cur}{t1:.3f} ({(t1 / entry - 1) * 100:+.1f}%)"),
-                    ("Target 2", f"{cur}{t2:.3f} ({(t2 / entry - 1) * 100:+.1f}%)"),
+                    ("Entry price (reference)", f"{cur}{fp(entry)}"),
+                    ("Buy zone", f"{cur}{fp(buy_lo)} – {cur}{fp(buy_hi)}"),
+                    ("Stop loss", f"{cur}{fp(stop)} ({(stop / entry - 1) * 100:.1f}%)"),
+                    ("Target 1", f"{cur}{fp(t1)} ({(t1 / entry - 1) * 100:+.1f}%)"),
+                    ("Target 2", f"{cur}{fp(t2)} ({(t2 / entry - 1) * 100:+.1f}%)"),
                     ("Risk : Reward (gross)", "–" if np.isnan(plan['rr1']) else f"1 : {plan['rr1']:.2f} / 1 : {plan['rr2']:.2f}"),
                     ("Risk : Reward (after fees)", "–" if np.isnan(rr_net1) else f"1 : {rr_net1:.2f} / 1 : {rr_net2:.2f}"),
                 ]
@@ -490,7 +495,7 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                     ("Position size", f"{sh:,} shares{lots_txt}"),
                     ("Required capital", f"{cur}{ps['cost']:,.2f} (incl. {cur}{fb:,.2f} buy fees)"),
                     ("Maximum monetary risk", f"{cur}{loss:,.2f} if stopped (incl. fees both ways)"),
-                    ("Break-even price", f"{cur}{be:.3f}" if be else "N/A"),
+                    ("Break-even price", f"{cur}{fp(be)}" if be else "N/A"),
                     ("Net profit at T1 / T2", f"{cur}{p1:,.2f} / {cur}{p2:,.2f}"),
                 ]
                 kv = lambda rows: "".join(f"<tr><td>{a}</td><td>{b}</td></tr>" for a, b in rows)  # noqa: E731
@@ -509,16 +514,16 @@ number of ATRs away, position size automatically shrinks when the stock is more 
                              unsafe_allow_html=True)
                 mgmt = [
                     ("💰 Partial profit-taking",
-                     f"Sell {half1:,} shares at T1 {cur}{t1:.3f} and {half2:,} at T2 {cur}{t2:.3f} → net "
+                     f"Sell {half1:,} shares at T1 {cur}{fp(t1)} and {half2:,} at T2 {cur}{fp(t2)} → net "
                      f"{cur}{part:,.2f}. If the rest is stopped at break-even after T1: net {cur}{part_be:,.2f}."
                      if half2 else f"Position too small to split into board lots: sell all at T1 (net {cur}{p1:,.2f})."),
                     ("🔒 Trailing stop",
-                     f"After T1, move the stop to break-even ({cur}{be:.3f}). Then trail it at the highest close − 2 × ATR "
-                     f"(right now that would be {cur}{trail_now:.3f}); only ever move it up." if be else "N/A"),
+                     f"After T1, move the stop to break-even ({cur}{fp(be)}). Then trail it at the highest close − 2 × ATR "
+                     f"(right now that would be {cur}{fp(trail_now)}); only ever move it up." if be else "N/A"),
                     ("⛔ Trade invalidation",
-                     f"Exit if a {bar_word} closes below the stop {cur}{stop:.3f}; reassess if price closes below support "
-                     f"{cur}{plan['s1']:.3f}, if ADX turns Strong Bearish, if a breakout entry falls back below "
-                     f"{cur}{plan['t1']:.3f} on volume, or if T1 isn't reached within about "
+                     f"Exit if a {bar_word} closes below the stop {cur}{fp(stop)}; reassess if price closes below support "
+                     f"{cur}{fp(plan['s1'])}, if ADX turns Strong Bearish, if a breakout entry falls back below "
+                     f"{cur}{fp(plan['t1'])} on volume, or if T1 isn't reached within about "
                      f"{2 * (plan['bars_t1'] or 5)} {bar_word}s (time stop)."),
                 ]
                 st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px'>"
@@ -599,7 +604,7 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                     when = "latest bar" if b["bars_ago"] == 0 else f"{b['bars_ago']} bar(s) ago"
                     brk_html = (f"{pill(b['type'] + ' · ' + b['grade'], gcol)}<div class='muted' style='margin-top:6px'>"
                                 f"{b['type']} of the 20-bar {'high' if b['type'] == 'Breakout' else 'low'} "
-                                f"{b['level']:.3f} ({when}) on <b>{b['rvol']:.1f}×</b> normal volume. "
+                                f"{fp(b['level'])} ({when}) on <b>{b['rvol']:.1f}×</b> normal volume. "
                                 + ("Strong volume = real buyers behind it." if b['grade'] == 'Confirmed' and b['type'] == 'Breakout'
                                    else "Strong volume = real selling behind it." if b['grade'] == 'Confirmed'
                                    else "Volume is so-so: wait for follow-through." if b['grade'] == 'Moderate'
@@ -750,23 +755,23 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
             cross_up = first_cross(fc["centre"], plan["t1"], up=True)
             cross_dn = first_cross(fc["centre"], sup[0][0], up=False)
             if fc["direction"] == "Uptrend":
-                hint = (f"If this pace holds, price could reach resistance <b>{plan['t1']:.3f}</b> in about "
+                hint = (f"If this pace holds, price could reach resistance <b>{fp(plan['t1'])}</b> in about "
                         f"<b>{cross_up} {unit_short}</b>, a likely area for sellers / taking profit."
-                        if cross_up else f"At this pace, price stays below resistance {plan['t1']:.3f} within {h} {unit_short}.")
+                        if cross_up else f"At this pace, price stays below resistance {fp(plan['t1'])} within {h} {unit_short}.")
             elif fc["direction"] == "Downtrend":
-                hint = (f"If this pace holds, price could drop to support <b>{sup[0][0]:.3f}</b> in about "
+                hint = (f"If this pace holds, price could drop to support <b>{fp(sup[0][0])}</b> in about "
                         f"<b>{cross_dn} {unit_short}</b>. Watch there for a bounce (buy) or a break (more downside)."
-                        if cross_dn else f"At this pace, price stays above support {sup[0][0]:.3f} within {h} {unit_short}.")
+                        if cross_dn else f"At this pace, price stays above support {fp(sup[0][0])} within {h} {unit_short}.")
             else:
                 hint = (f"No reliable trend: price is moving sideways. Range traders buy near support "
-                        f"{sup[0][0]:.3f} and sell near resistance {plan['t1']:.3f}.")
+                        f"{fp(sup[0][0])} and sell near resistance {fp(plan['t1'])}.")
             st.markdown(f"""
     <div class="card"><h3>Trend forecast · next {h} {unit_short}</h3>
     <div style="margin-bottom:10px">{pill(f"{fc['arrow']} {fc['direction']}", dir_col)} {pill(f"{fc['strength']} trend · R² {fc['r2']:.2f}", P['muted'])}</div>
     <table class="kv">
-    <tr><td>Projected price</td><td>{fc['centre'][-1]:.3f} <span class="muted">({fc['total']:+.1f}%)</span></td></tr>
-    <tr><td>Likely range (68%)</td><td>{fc['lo1'][-1]:.3f} – {fc['hi1'][-1]:.3f}</td></tr>
-    <tr><td>Wide range (95%)</td><td>{fc['lo2'][-1]:.3f} – {fc['hi2'][-1]:.3f}</td></tr>
+    <tr><td>Projected price</td><td>{fp(fc['centre'][-1])} <span class="muted">({fc['total']:+.1f}%)</span></td></tr>
+    <tr><td>Likely range (68%)</td><td>{fp(fc['lo1'][-1])} – {fp(fc['hi1'][-1])}</td></tr>
+    <tr><td>Wide range (95%)</td><td>{fp(fc['lo2'][-1])} – {fp(fc['hi2'][-1])}</td></tr>
     <tr><td>Trend speed</td><td>{fc['per_bar']:+.2f}% per bar</td></tr>
     <tr><td>Momentum</td><td style="font-weight:500">{fc['momentum']}</td></tr>
     </table>
@@ -786,11 +791,11 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
  <div><div class="muted">Forecasts tested</div><div style="font-size:20px;font-weight:600">{bt_m['n']}</div></div>
  <div><div class="muted">Directional accuracy</div><div style="font-size:20px;font-weight:600">{bt_m['dir_acc']:.0f}%</div>
    <div class="muted" style="font-size:12px">'always up' would score {bt_m['up_rate']:.0f}%</div></div>
- <div><div class="muted">MAE</div><div style="font-size:20px;font-weight:600">{cur}{bt_m['mae']:.3f}</div>
+ <div><div class="muted">MAE</div><div style="font-size:20px;font-weight:600">{cur}{fp(bt_m['mae'])}</div>
    <div class="muted" style="font-size:12px">{bt_m['mape']:.1f}% of price</div></div>
- <div><div class="muted">RMSE</div><div style="font-size:20px;font-weight:600">{cur}{bt_m['rmse']:.3f}</div></div>
+ <div><div class="muted">RMSE</div><div style="font-size:20px;font-weight:600">{cur}{fp(bt_m['rmse'])}</div></div>
  <div><div class="muted">vs 'no change' guess</div><div style="font-size:20px;font-weight:600;color:{skill_col}">{bt_m['skill']:+.0f}%</div>
-   <div class="muted" style="font-size:12px">naive MAE {cur}{bt_m['naive_mae']:.3f}</div></div>
+   <div class="muted" style="font-size:12px">naive MAE {cur}{fp(bt_m['naive_mae'])}</div></div>
  <div><div class="muted">Band coverage 68% / 95%</div><div style="font-size:20px;font-weight:600">{bt_m['cov68']:.0f}% / {bt_m['cov95']:.0f}%</div>
    <div class="muted" style="font-size:12px">{cov_note}</div></div>
 </div>
@@ -876,7 +881,7 @@ Method: the classical approach in John J. Murphy's <i>Technical Analysis of the 
 • <b>Support</b> = a previous reaction low, <b>resistance</b> = a previous reaction high. A candle counts only if it is the
 lowest/highest of the {REACTION_W} candles on each side (so the latest {REACTION_W} candles are never used: no look-ahead)
 and price then moved at least {MIN_REACTION_ATR:.0f} ATR away from it (a real reaction, not noise).<br>
-• Reaction points within {zmeta['tol'] if zmeta else 0:.3f} (½ ATR, min 0.6%) of each other form one <b>zone</b>; the line is the median.<br>
+• Reaction points within {fp(zmeta['tol'] if zmeta else 0)} (½ ATR, min 0.6%) of each other form one <b>zone</b>; the line is the median.<br>
 • A zone is used only if it was <b>tested 2+ times</b>, or once by a <b>major swing</b> (≥ {MAJOR_REACTION_ATR:.0f} ATR reaction).
 Strength follows Murphy's three factors: number of tests, <b>time</b> traded in the zone, <b>volume</b> there, and <b>recency</b>.<br>
 • <b>Role reversal</b>: a broken resistance becomes support (and vice versa); it is flagged.
@@ -891,11 +896,11 @@ With no level above (new highs) or below, a dotted <b>ATR projection</b> (±2 AT
                         return {"Type": kind, "Level": l, "Zone": "", "Tests": "projected", "Grade": "ATR projection",
                                 "Strength": None, "Days in zone": None, "Vol vs avg": None, "Last tested": "",
                                 "Role": "", "Reaction dates": "", "Distance %": (l / price - 1) * 100}
-                    return {"Type": kind, "Level": l, "Zone": f"{z['lo']:.3f} – {z['hi']:.3f}", "Tests": str(n),
+                    return {"Type": kind, "Level": l, "Zone": f"{fp(z['lo'])} – {fp(z['hi'])}", "Tests": str(n),
                             "Grade": z["grade"], "Strength": z["strength"], "Days in zone": z["time_bars"],
                             "Vol vs avg": z["vol_ratio"], "Last tested": z["last_date"].strftime("%d %b %Y"),
                             "Role": z["polarity"],
-                            "Reaction dates": ", ".join(f"{ts:%d %b %y} ({'low' if k == 'trough' else 'high'} {p_:.3f})"
+                            "Reaction dates": ", ".join(f"{ts:%d %b %y} ({'low' if k == 'trough' else 'high'} {fp(p_)})"
                                                         for ts, p_, k, _ in z["members"]),
                             "Distance %": (l / price - 1) * 100}
                 lv = pd.DataFrame([_row("Resistance", l, n) for l, n in reversed(res)]

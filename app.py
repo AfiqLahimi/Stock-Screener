@@ -18,7 +18,7 @@ import prefs  # noqa: E402
 import ui  # noqa: E402
 from core import (BURSA, DEMO, INTERVALS, NAMES, US, YF_SECTORS, apply_theme, display_name,  # noqa: E402
                   load_bursa_all, load_shariah, normalise)
-from views import (analysis, calendar_view, commodities, compare, dashboard, macro, notes_page, others,  # noqa: E402
+from views import (analysis, calendar_view, commodities, compare, crypto, dashboard, macro, notes_page, others,  # noqa: E402
                    portfolio, risk, screener)
 
 try:
@@ -54,6 +54,7 @@ PAGES = {
     "portfolio": _page(portfolio.render, "My Portfolio", "📁", "portfolio"),
     "notes": _page(notes_page.render, "Notes", "📝", "notes"),
     "commodities": _page(commodities.render, "Commodities", "🛢️", "commodities"),
+    "crypto": _page(crypto.render, "Crypto", "🪙", "crypto"),
     "calendar": _page(calendar_view.render, "Calendar", "📅", "calendar"),
     "macro": _page(macro.render, "Macro", "🌐", "macro"),
     "terminal": _page(others.terminal_page, "Terminal", "🖥️", "terminal"),
@@ -66,7 +67,7 @@ PAGES = {
     "learn": _page(others.learn_page, "Learn", "🎓", "learn"),
 }
 nav = st.navigation({
-    "Markets": [PAGES[k] for k in ("dashboard", "macro", "commodities", "heatmap")],
+    "Markets": [PAGES[k] for k in ("dashboard", "macro", "commodities", "crypto", "heatmap")],
     "Research": [PAGES[k] for k in ("screener", "analysis", "compare", "picks", "notes")],
     "Portfolio & trade": [PAGES[k] for k in ("portfolio", "risk", "terminal", "multichart", "paper", "tradingview")],
     "Income & events": [PAGES[k] for k in ("calendar", "dividends", "ipo")],

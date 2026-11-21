@@ -124,3 +124,15 @@ def test_portfolio_math(monkeypatch):
     assert r["Qty"] == 400 and r["Avg cost"] == pytest.approx(2.5)
     assert r["P/L (RM)"] == pytest.approx(400 * (r["Last"] - 2.5))
     assert r["Weight %"] == pytest.approx(100.0)
+
+
+def test_crypto_symbols_and_price_format():
+    from core import normalise_crypto
+    from pxfmt import fp
+    assert normalise_crypto("btc") == "BTC-USD"
+    assert normalise_crypto("Bitcoin") == "BTC-USD"
+    assert normalise_crypto("BINANCE:ETHUSDT") == "ETH-USD"
+    assert normalise_crypto("sui") == "SUI20947-USD"
+    assert normalise_crypto("render") == "RENDER-USD"
+    assert fp(15.7051) == "15.705" and fp(0.5) == "0.500" and fp(0.0000123456) == "0.0000123"
+    assert fp(float("nan")) == "N/A" and fp(65432.1, True) == "65,432.100"

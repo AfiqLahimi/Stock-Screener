@@ -1,4 +1,5 @@
 """Compare page: 2–4 stocks side by side (performance, risk, technical and fundamental scores, correlation)."""
+from pxfmt import fp, pxf  # noqa: F401
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -88,7 +89,7 @@ def render(C):
         dd, _, _ = R.max_drawdown(s.tail(n))
         p = prof[t]
         rows[t] = {
-            "Price": "N/A" if not len(s) else f"{s.iloc[-1]:,.3f}",
+            "Price": "N/A" if not len(s) else f"{fp(s.iloc[-1], True)}",
             "1-month return": pct(R.period_return(s, 21)), "3-month return": pct(R.period_return(s, 63)),
             "1-year return": pct(R.period_return(s, 252)),
             "Volatility (1y, annual)": "N/A" if R.ann_vol(rets[t].tail(252)) is None else f"{R.ann_vol(rets[t].tail(252)):.1f}%",

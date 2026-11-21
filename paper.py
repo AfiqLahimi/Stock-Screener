@@ -4,6 +4,7 @@ Bursa board lots and fees, positions, history, performance stats and an equity c
 No real orders are ever sent anywhere. The account is saved on the app server (paper_account.json)
 and mirrored to this browser's local storage, and can be downloaded/restored as a JSON backup.
 """
+from pxfmt import fp, pxf  # noqa: F401
 import json
 import os
 import uuid
@@ -174,7 +175,7 @@ def _buy(acct, ticker, qty, price, when, reason, sl=None, tp=None):
         acct["positions"][ticker] = {"qty": qty, "avg": (value + fee) / qty, "opened": str(when), "sl": sl, "tp": tp}
     acct["trades"].append({"time": str(when), "ticker": ticker, "side": "BUY", "qty": qty, "price": price,
                            "fees": fee, "pnl": None, "reason": reason})
-    return True, f"Bought {qty:,} {ticker} @ {price:.3f} (fees {sym(c)}{fee:.2f})"
+    return True, f"Bought {qty:,} {ticker} @ {fp(price)} (fees {sym(c)}{fee:.2f})"
 
 
 def _sell(acct, ticker, qty, price, when, reason):
@@ -194,7 +195,7 @@ def _sell(acct, ticker, qty, price, when, reason):
                 o["status"], o["note"] = "CANCELLED", "position closed"
     acct["trades"].append({"time": str(when), "ticker": ticker, "side": "SELL", "qty": qty, "price": price,
                            "fees": fee, "pnl": pnl, "reason": reason})
-    return True, f"Sold {qty:,} {ticker} @ {price:.3f}, P/L {sym(c)}{pnl:,.2f}"
+    return True, f"Sold {qty:,} {ticker} @ {fp(price)}, P/L {sym(c)}{pnl:,.2f}"
 
 
 def place_order(acct, ticker, side, otype, qty, price=None, sl=None, tp=None):
@@ -206,10 +207,10 @@ def place_order(acct, ticker, side, otype, qty, price=None, sl=None, tp=None):
         cur = last_price(ticker)
         fill_ref = cur if otype == "MARKET" or cur is None else (min(price, cur) if otype == "LIMIT" else max(price, cur))
         if fill_ref is not None and sl is not None and sl >= fill_ref:
-            return False, f"Stop loss {sl:.3f} is at/above the price this would fill at (~{fill_ref:.3f}). " \
+            return False, f"Stop loss {fp(sl)} is at/above the price this would fill at (~{fp(fill_ref)}). " \
                           "Lower the stop or the entry."
         if fill_ref is not None and tp is not None and tp <= fill_ref:
-            return False, f"Take profit {tp:.3f} is at/below the price this would fill at (~{fill_ref:.3f})."
+            return False, f"Take profit {fp(tp)} is at/below the price this would fill at (~{fp(fill_ref)})."
     if side == "SELL":
         held = acct["positions"].get(ticker, {}).get("qty", 0)
         reserved = sum(o["qty"] for o in acct["orders"] if o["ticker"] == ticker and o["side"] == "SELL"
@@ -242,7 +243,7 @@ def place_order(acct, ticker, side, otype, qty, price=None, sl=None, tp=None):
     acct["orders"].append({"id": uuid.uuid4().hex[:8], "ticker": ticker, "side": side, "type": otype, "qty": qty,
                            "price": price, "sl": sl, "tp": tp, "created": str(now), "status": "OPEN",
                            "fill_price": None, "filled_at": None, "note": ""})
-    return True, f"{otype.title()} {side.lower()} order placed: {qty:,} {ticker} @ {price:.3f} (good till cancelled)"
+    return True, f"{otype.title()} {side.lower()} order placed: {qty:,} {ticker} @ {fp(price)} (good till cancelled)"
 
 
 def _touch(order, bar):
@@ -451,7 +452,7 @@ def render(display_name, normalise, P, pill, all_symbols, stock_panel):
         lot = lot_of(ticker)
         held = acct["positions"].get(ticker, {}).get("qty", 0)
         st.markdown(f"<div class='card' style='margin:6px 0 10px'><b>{display_name(ticker)}</b> "
-                    f"<span class='muted'>{ticker}</span> &nbsp; last <b>{'N/A' if px is None else f'{sym(c)}{px:,.3f}'}</b>"
+                    f"<span class='muted'>{ticker}</span> &nbsp; last <b>{'N/A' if px is None else f'{sym(c)}{fp(px, True)}'}</b>"
                     f" &nbsp;·&nbsp; you hold <b>{held:,}</b> shares &nbsp;·&nbsp; "
                     f"{'market open' if ta_plus.market_open(ticker) else 'market closed'}</div>",
                     unsafe_allow_html=True)
@@ -564,7 +565,7 @@ def render(display_name, normalise, P, pill, all_symbols, stock_panel):
                                         "Qty": o["qty"], "Price": o["price"], "SL": o.get("sl"), "TP": o.get("tp")}
                                        for o in open_o]), hide_index=True, width="stretch")
             oid = st.selectbox("Cancel an order", [o["id"] for o in open_o],
-                               format_func=lambda i: next(f"{o['side']} {o['qty']:,} {o['ticker']} @ {o['price']:.3f}"
+                               format_func=lambda i: next(f"{o['side']} {o['qty']:,} {o['ticker']} @ {fp(o['price'])}"
                                                           for o in open_o if o["id"] == i), key="pt_cancel")
             if st.button("✖ Cancel order"):
                 for o in acct["orders"]:

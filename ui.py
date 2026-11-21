@@ -2,6 +2,7 @@
 
 The colour palette lives in core.P and is unchanged; this file only decides how things are laid out.
 """
+from pxfmt import fp, pxf  # noqa: F401
 from contextlib import contextmanager
 
 import numpy as np
@@ -16,7 +17,7 @@ import re
 
 # Widget values that should survive switching pages. Only plain input widgets are listed: buttons, uploaders and
 # table selections are read-only in Streamlit and must never be re-assigned.
-_KEEP = re.compile(r"^(pick|an_typed|panels|overlays|extra_sel|scr_(filter|c_[a-z0-9]+|mode|cols)|ts_[a-z]+"
+_KEEP = re.compile(r"^(pick|an_typed|cr_pick|cr_tf|panels|overlays|extra_sel|scr_(filter|c_[a-z0-9]+|mode|cols)|ts_[a-z]+"
                    r"|term_(add|search|rng|ema|engine|cat|filter|layout|h|ov|pn|type)|mc_(\d|tf|layout|panels|n|slot)"
                    r"|pt_(symbol|other|side|type|lots|shares|price|use_sl|sl|use_tp|tp|manage|f\d|smyr|susd)"
                    r"|ptc_(tf|panels)|div_(amt|lots|mode|pick|shares|sort)|gl_(cat|q)|hm_(metric|size)|ipo_kw"
@@ -71,7 +72,7 @@ def topbar(title, icon):
 
 
 PHONE_ORDER = ("dashboard", "portfolio", "screener", "analysis", "terminal", "multichart", "paper", "risk", "compare",
-               "calendar", "macro", "commodities", "notes", "picks", "heatmap", "dividends", "ipo", "tradingview", "learn")
+               "calendar", "macro", "commodities", "crypto", "notes", "picks", "heatmap", "dividends", "ipo", "tradingview", "learn")
 
 
 def phone_nav(pages, current):
@@ -167,13 +168,13 @@ def render_stock_panel(ticker, key, use_plan_cb=None):
 <span class="muted">RSI {last['RSI']:.0f}</span></div>
 <div style="margin:10px 0 6px;font-weight:600">{plan['action']}</div>
 <table style="width:100%;font-size:13px">
-<tr><td class="muted">Buy zone</td><td style="text-align:right">{plan['buy_lo']:.3f} – {plan['buy_hi']:.3f}</td></tr>
-<tr><td class="muted">Entry</td><td style="text-align:right">{plan['entry']:.3f}</td></tr>
-<tr><td class="muted">Stop loss</td><td style="text-align:right;color:{P['down']}">{plan['stop']:.3f}
+<tr><td class="muted">Buy zone</td><td style="text-align:right">{fp(plan['buy_lo'])} – {fp(plan['buy_hi'])}</td></tr>
+<tr><td class="muted">Entry</td><td style="text-align:right">{fp(plan['entry'])}</td></tr>
+<tr><td class="muted">Stop loss</td><td style="text-align:right;color:{P['down']}">{fp(plan['stop'])}
  <span class="muted">({-risk / plan['entry'] * 100 if plan['entry'] else 0:.1f}%)</span></td></tr>
-<tr><td class="muted">Target 1 / 2</td><td style="text-align:right;color:{P['up']}">{plan['t1']:.3f} / {plan['t2']:.3f}</td></tr>
+<tr><td class="muted">Target 1 / 2</td><td style="text-align:right;color:{P['up']}">{fp(plan['t1'])} / {fp(plan['t2'])}</td></tr>
 <tr><td class="muted">Reward : risk (T1)</td><td style="text-align:right">{rr}</td></tr>
-<tr><td class="muted">Support / resistance</td><td style="text-align:right">{plan['s1']:.3f} / {plan['t1']:.3f}</td></tr>
+<tr><td class="muted">Support / resistance</td><td style="text-align:right">{fp(plan['s1'])} / {fp(plan['t1'])}</td></tr>
 </table>
 <div style="margin-top:8px;font-size:12.5px">{''.join(f"<div style='color:{P['up']}'>＋ {t}</div>" for t in pros)}
 {''.join(f"<div style='color:{P['down']}'>－ {t}</div>" for t in cons)}</div>

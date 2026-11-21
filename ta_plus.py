@@ -4,6 +4,7 @@ Data integrity, ATR volatility & risk, multi-timeframe analysis, candlestick con
 Bursa/US transaction costs and position sizing, walk-forward forecast backtesting, and the
 rule-based narrative summary. Everything is computed locally from the downloaded candles.
 """
+from pxfmt import fp, pxf  # noqa: F401
 import math
 from datetime import time as dtime
 
@@ -18,17 +19,24 @@ import learn
 EXCHANGES = {
     "KL": ("Asia/Kuala_Lumpur", [(dtime(9, 0), dtime(12, 30)), (dtime(14, 30), dtime(17, 0))], "Bursa Malaysia"),
     "US": ("America/New_York", [(dtime(9, 30), dtime(16, 0))], "US market"),
+    "CRYPTO": ("UTC", [(dtime(0, 0), dtime(23, 59, 59, 999999))], "Crypto (24/7, UTC candles)"),
 }
 IV_MINUTES = {"15m": 15, "1h": 60, "4h": 240}
 
 
+def is_crypto(ticker):
+    return str(ticker).upper().endswith(("-USD", "-USDT", "-MYR", "-EUR", "-BTC", "-ETH"))
+
+
 def exchange_of(ticker):
-    return "KL" if ticker.endswith(".KL") else "US"
+    return "KL" if ticker.endswith(".KL") else "CRYPTO" if is_crypto(ticker) else "US"
 
 
 def market_open(ticker, now=None):
     tz, sessions, _ = EXCHANGES[exchange_of(ticker)]
     now = now or pd.Timestamp.now(tz=tz)
+    if exchange_of(ticker) == "CRYPTO":
+        return True
     if now.weekday() >= 5:
         return False
     t = now.time()
@@ -50,9 +58,11 @@ def candle_status(d: pd.DataFrame, interval: str, ticker: str, now=None):
                 "note": "No data"}
     last = _to_exchange_tz(d.index[-1], tz)
     forming, stale = False, False
+    crypto = exchange_of(ticker) == "CRYPTO"
     if interval == "1d":
         forming = is_open and last.date() == now.date()
-        stale = np.busday_count(np.datetime64(last.date()), np.datetime64(now.date())) > 3
+        stale = ((now.normalize() - last.normalize()).days > 2) if crypto else \
+            np.busday_count(np.datetime64(last.date()), np.datetime64(now.date())) > 3
     elif interval == "1wk":
         forming = (now.weekday() < 5 or is_open) and last.isocalendar()[:2] == now.isocalendar()[:2]
         stale = (now - last).days > 14
@@ -519,11 +529,11 @@ def narrative(name, ticker, d, sup, res, plan, va, ax, mtf, fc, vol, pats, statu
     near_r = (r1 - price) <= atr and res[0][1] > 0
     near_s = (price - s1) <= atr
     if near_r:
-        loc = f"Price is approaching resistance at {cur}{r1:.3f}"
+        loc = f"Price is approaching resistance at {cur}{fp(r1)}"
     elif near_s:
-        loc = f"Price is sitting near support at {cur}{s1:.3f}"
+        loc = f"Price is sitting near support at {cur}{fp(s1)}"
     else:
-        loc = f"Price is between support at {cur}{s1:.3f} and resistance at {cur}{r1:.3f}"
+        loc = f"Price is between support at {cur}{fp(s1)} and resistance at {cur}{fp(r1)}"
     # volume confirmation
     if va is None:
         vtxt, vconf = "Volume data is not available.", None
@@ -536,20 +546,20 @@ def narrative(name, ticker, d, sup, res, plan, va, ax, mtf, fc, vol, pats, statu
             and ((lt_short == "uptrend") != (votes >= 2)) else
             f"{name} is currently in {lt}, and short-term momentum is {mom}.")
     head += f" {loc}. {vtxt} "
-    head += (f"A breakout above {cur}{r1:.3f} may provide a potential entry opportunity, while a rejection could lead "
-             f"to a retest of {cur}{s1:.3f}.")
+    head += (f"A breakout above {cur}{fp(r1)} may provide a potential entry opportunity, while a rejection could lead "
+             f"to a retest of {cur}{fp(s1)}.")
 
     sec = {}
-    sec["Overall trend"] = (f"Price {cur}{price:.3f} vs EMA20 {e20:.3f} / EMA50 {e50:.3f} / EMA200 "
-                            + (f"{e200:.3f}" if enough200 else "N/A") + f" → {lt}.")
+    sec["Overall trend"] = (f"Price {cur}{fp(price)} vs EMA20 {fp(e20)} / EMA50 {fp(e50)} / EMA200 "
+                            + (f"{fp(e200)}" if enough200 else "N/A") + f" → {lt}.")
     sec["Short-term momentum"] = (f"Price is {'above' if price > e20 else 'below'} EMA20, RSI {rsi:.1f}, MACD line "
                                   f"{'above' if macd_above else 'below'} its signal line → {mom}.")
     sec["Long-term trend"] = (f"EMA50 is {'above' if e50 > e200 else 'below'} EMA200 and price is "
                               f"{'above' if price > e200 else 'below'} EMA200." if enough200 else
                               "Not enough history for EMA200 (needs ≥ 250 candles).")
-    sec["Support & resistance"] = (f"Nearest support {cur}{s1:.3f} ({(s1 / price - 1) * 100:+.1f}%, "
-                                   f"{sup[0][1] or 'projected'} touches), next {cur}{s2:.3f}. Nearest resistance "
-                                   f"{cur}{r1:.3f} ({(r1 / price - 1) * 100:+.1f}%), next {cur}{r2:.3f}.")
+    sec["Support & resistance"] = (f"Nearest support {cur}{fp(s1)} ({(s1 / price - 1) * 100:+.1f}%, "
+                                   f"{sup[0][1] or 'projected'} touches), next {cur}{fp(s2)}. Nearest resistance "
+                                   f"{cur}{fp(r1)} ({(r1 / price - 1) * 100:+.1f}%), next {cur}{fp(r2)}.")
     if va:
         ud_txt = "∞" if np.isinf(va["ud"]) else f"{va['ud']:.2f}"
         sec["Volume behaviour"] = (f"RVOL {va['rvol']:.2f}× (latest vs 20-bar average), up/down volume {ud_txt}"
@@ -571,20 +581,20 @@ def narrative(name, ticker, d, sup, res, plan, va, ax, mtf, fc, vol, pats, statu
     else:
         sec["Multi-timeframe"] = "N/A"
     if vol:
-        sec["Volatility"] = (f"ATR {vol['atr']:.3f} = {vol['atrp']:.2f}% of price per candle → {vol['cls']} "
+        sec["Volatility"] = (f"ATR {fp(vol['atr'])} = {vol['atrp']:.2f}% of price per candle → {vol['cls']} "
                              f"volatility" + (f" ({vol['pct']:.0f}th percentile of the last {vol['n']} candles)."
                                               if vol["pct"] is not None else "."))
     vol_need = (f" with volume ≥ 1.5× average (≥ {va['avg'] * 1.5:,.0f} shares)" if va else "")
-    sec["Bullish scenario"] = (f"A close above {cur}{r1:.3f}{vol_need} would confirm a breakout and open the way "
-                               f"to {cur}{r2:.3f} ({(r2 / price - 1) * 100:+.1f}%).")
-    sec["Bearish scenario"] = (f"A close below {cur}{s1:.3f} would expose {cur}{s2:.3f} "
-                               f"({(s2 / price - 1) * 100:+.1f}%); the trade plan is invalid below {cur}{plan['stop']:.3f}.")
+    sec["Bullish scenario"] = (f"A close above {cur}{fp(r1)}{vol_need} would confirm a breakout and open the way "
+                               f"to {cur}{fp(r2)} ({(r2 / price - 1) * 100:+.1f}%).")
+    sec["Bearish scenario"] = (f"A close below {cur}{fp(s1)} would expose {cur}{fp(s2)} "
+                               f"({(s2 / price - 1) * 100:+.1f}%); the trade plan is invalid below {cur}{fp(plan['stop'])}.")
     conds = []
     if price <= plan["buy_hi"]:
-        conds.append(f"Price is inside the buy zone {cur}{plan['buy_lo']:.3f}–{plan['buy_hi']:.3f}")
+        conds.append(f"Price is inside the buy zone {cur}{fp(plan['buy_lo'])}–{fp(plan['buy_hi'])}")
     else:
-        conds.append(f"Pullback into {cur}{plan['buy_lo']:.3f}–{plan['buy_hi']:.3f}, or a breakout close above "
-                     f"{cur}{r1:.3f}{vol_need}")
+        conds.append(f"Pullback into {cur}{fp(plan['buy_lo'])}–{fp(plan['buy_hi'])}, or a breakout close above "
+                     f"{cur}{fp(r1)}{vol_need}")
     if ax and ax["regime"] in ("Sideways Market",):
         conds.append("ADX below 20: prefer range entries near support over breakouts")
     elif ax and "Bearish" in ax["regime"]:
@@ -595,7 +605,7 @@ def narrative(name, ticker, d, sup, res, plan, va, ax, mtf, fc, vol, pats, statu
     if bull_conf:
         conds.append(f"confirmed {bull_conf[0]['name']} supports an entry")
     sec["Suggested entry conditions"] = "; ".join(conds) + "."
-    risks = [f"Invalidation: a close below {cur}{plan['stop']:.3f}"]
+    risks = [f"Invalidation: a close below {cur}{fp(plan['stop'])}"]
     if rsi > 70:
         risks.append(f"RSI {rsi:.0f} is overbought")
     if va and va["score"] <= -2:

@@ -1,4 +1,5 @@
 """Multi-Chart: watch up to 6 stocks side by side, each with its signal, score and key levels."""
+from pxfmt import fp, pxf  # noqa: F401
 import streamlit as st
 
 import ui
@@ -71,10 +72,10 @@ def render(display_name, normalise, P, pill, all_symbols, universe, stock_view, 
                     f"<div style='display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap'>"
                     f"<div><b>{display_name(t)}</b> <span class='muted'>{t}</span></div>"
                     f"{pill(sig, LABEL_COLOR[v['label']])}</div>"
-                    f"<div><span style='font-size:18px;font-weight:600'>{v['price']:,.3f}</span> "
+                    f"<div><span style='font-size:18px;font-weight:600'>{fp(v['price'], True)}</span> "
                     f"<span style='color:{col}'>{v['chg']:+.2f}%</span></div>"
-                    f"<div class='muted' style='font-size:12px'>S {p['s1']:.3f} · R {p['t1']:.3f} · "
-                    f"stop {p['stop']:.3f}{' · ' + v['ax']['regime'] if v['ax'] else ''}</div></div>",
+                    f"<div class='muted' style='font-size:12px'>S {fp(p['s1'])} · R {fp(p['t1'])} · "
+                    f"stop {fp(p['stop'])}{' · ' + v['ax']['regime'] if v['ax'] else ''}</div></div>",
                     unsafe_allow_html=True)
                 fig = make_chart(v["d"], v["sup"], v["res"], p, display_name(t), v["iv"],
                                  show_bars=min(v["bars"], 90), panels=panels,

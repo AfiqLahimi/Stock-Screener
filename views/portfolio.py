@@ -1,6 +1,7 @@
 """My Portfolio: the shares you actually own, entered by hand (no broker connection), priced live.
 Lots are saved with your preferences (server + browser). Dividends received are estimated from each
 stock's dividend history since the buy date."""
+from pxfmt import fp, pxf  # noqa: F401
 from functools import partial
 
 import numpy as np
@@ -38,7 +39,7 @@ def _add_one():
                      "date": str(st.session_state.get("pf_date") or pd.Timestamp.now().date()),
                      "note": st.session_state.get("pf_note") or ""})
         _save(lots)
-        st.session_state["pf_flash"] = f"Added {q:,.0f} {display_name(t)} @ {c:,.3f}."
+        st.session_state["pf_flash"] = f"Added {q:,.0f} {display_name(t)} @ {fp(c, True)}."
         st.session_state["pf_typed"] = ""
         st.session_state["pf_note"] = ""
     else:

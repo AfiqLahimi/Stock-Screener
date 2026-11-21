@@ -17,6 +17,8 @@ CSV uploads, no paid APIs, no broker connection: everything is calculated in the
   ringgit crosses, and 16 US economic series from FRED (inflation, jobs, growth, rates and credit, sentiment).
 - **Commodities**: about 20 energy, metal and farm futures with 1D–1Y changes and distance from the 5-year high, a
   chart, and which Bursa companies a price rise typically helps or hurts, with the measured correlation as evidence.
+- **Crypto**: board of 25 major coins (price in US$, 24h/7d/30d/1Y, RSI, signal) and, for any coin, the same chart,
+  trade plan and support/resistance as for stocks, with full technical analysis one click away. Technical only.
 - **Heatmap**: market heatmap by sector.
 
 **Research**

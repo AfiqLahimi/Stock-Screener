@@ -8,6 +8,7 @@ individual EMA crosses are folded into one moving-average structure item; Stoch 
 and the stochastic already say). The Technical Score is the weighted average of the available groups; the
 weights are configurable. Scores describe the current evidence; they are not probabilities of success.
 """
+from pxfmt import fp, pxf  # noqa: F401
 import numpy as np
 import pandas as pd
 
@@ -48,7 +49,9 @@ def label_of(score):
 
 
 def _f(v, fmt="{:,.3f}"):
-    return "N/A" if not _ok(v) else fmt.format(v)
+    if not _ok(v):
+        return "N/A"
+    return fp(v, True) if fmt == "{:,.3f}" else fmt.format(v)
 
 
 # ============================================================================
@@ -245,7 +248,7 @@ def volatility_group(x):
                            "squeeze on" if bool(last["SQZ"]) else "no squeeze"))
     if _ok(last["ATR"]):
         a = float(last["ATR"])
-        items.append(_info("ATR stop references", "", f"1.5× {c - 1.5 * a:,.3f} · 2× {c - 2 * a:,.3f} · 3× {c - 3 * a:,.3f}",
+        items.append(_info("ATR stop references", "", f"1.5× {fp(c - 1.5 * a, True)} · 2× {fp(c - 2 * a, True)} · 3× {fp(c - 3 * a, True)}",
                            "Distance below the last close; wider stops suit more volatile stocks."))
     return items
 
@@ -258,18 +261,18 @@ def price_action_group(x, sup, res, patterns=None):
     stc = ind.structure(x)
     if stc["hh"] is not None:
         pts = 1.0 if stc["hh"] and stc["hl"] else -1.0 if not stc["hh"] and not stc["hl"] else 0.0
-        items.append(_item("Market structure", f"highs {stc['prev_hi']:,.3f}→{stc['last_hi']:,.3f}, lows "
-                           f"{stc['prev_lo']:,.3f}→{stc['last_lo']:,.3f}", stc["label"], pts, 1.0,
+        items.append(_item("Market structure", f"highs {fp(stc['prev_hi'], True)}→{fp(stc['last_hi'], True)}, lows "
+                           f"{fp(stc['prev_lo'], True)}→{fp(stc['last_lo'], True)}", stc["label"], pts, 1.0,
                            "Last two confirmed swing highs and lows (3 bars each side)."))
     hh, ll = last["HH20"], last["LL20"]
     if _ok(hh, ll):
         rv = float(last["RVOL"]) if _ok(last["RVOL"]) else 1.0
         if c > hh:
-            items.append(_item("Breakout", f"above 20-bar high {hh:,.3f}", "breakout" +
+            items.append(_item("Breakout", f"above 20-bar high {fp(hh, True)}", "breakout" +
                                (" on strong volume (confirmed)" if rv >= 1.5 else " on normal volume (unconfirmed)"),
                                1.0 if rv >= 1.5 else 0.6, 1.0))
         elif c < ll:
-            items.append(_item("Breakdown", f"below 20-bar low {ll:,.3f}", "breakdown" +
+            items.append(_item("Breakdown", f"below 20-bar low {fp(ll, True)}", "breakdown" +
                                (" on strong volume" if rv >= 1.5 else " on normal volume"), -1.0 if rv >= 1.5 else -0.6, 1.0))
         else:
             rt = _retest(x, atr)
@@ -277,18 +280,18 @@ def price_action_group(x, sup, res, patterns=None):
                 items.append(_item("Retest", rt["value"], rt["reading"], rt["points"], 1.0,
                                    "A broken level that price comes back to and respects."))
             else:
-                items.append(_item("Range position", f"{ll:,.3f} – {hh:,.3f}",
+                items.append(_item("Range position", f"{fp(ll, True)} – {fp(hh, True)}",
                                    f"inside the 20-bar range ({(c - ll) / (hh - ll) * 100:.0f}% of the way up)" if hh > ll
                                    else "inside the 20-bar range", 0.0, 0.5))
     if sup and res and atr:
         ds, dr = (c - sup[0][0]) / atr, (res[0][0] - c) / atr
         if ds <= 1 and (stc.get("hl") or stc.get("hh") is None):
-            pts, rd = 0.5, f"{ds:.1f} ATR above support {sup[0][0]:,.3f}: buyers defended it before"
+            pts, rd = 0.5, f"{ds:.1f} ATR above support {fp(sup[0][0], True)}: buyers defended it before"
         elif dr <= 1:
-            pts, rd = -0.3, f"{dr:.1f} ATR below resistance {res[0][0]:,.3f}: sellers may appear"
+            pts, rd = -0.3, f"{dr:.1f} ATR below resistance {fp(res[0][0], True)}: sellers may appear"
         else:
             pts, rd = 0.0, f"{ds:.1f} ATR above support, {dr:.1f} ATR below resistance"
-        items.append(_item("Support / resistance position", f"S {sup[0][0]:,.3f} · R {res[0][0]:,.3f}", rd, pts, 0.5,
+        items.append(_item("Support / resistance position", f"S {fp(sup[0][0], True)} · R {fp(res[0][0], True)}", rd, pts, 0.5,
                            "Levels from clustered swing points (more touches = stronger)."))
     for kind in ("support", "resistance"):
         tl = ind.trendline(x, kind)
@@ -296,12 +299,12 @@ def price_action_group(x, sup, res, patterns=None):
             above = c > tl["value"]
             if kind == "support":
                 pts = (0.5 if above else -0.7) if tl["slope"] > 0 else (0.0 if above else -0.3)
-                rd = f"rising support line at {tl['value']:,.3f}: price {'above' if above else 'below (broken)'}" \
-                    if tl["slope"] > 0 else f"falling lows line at {tl['value']:,.3f}"
+                rd = f"rising support line at {fp(tl['value'], True)}: price {'above' if above else 'below (broken)'}" \
+                    if tl["slope"] > 0 else f"falling lows line at {fp(tl['value'], True)}"
             else:
                 pts = (0.7 if above else -0.3) if tl["slope"] < 0 else (0.3 if above else 0.0)
-                rd = f"falling resistance line at {tl['value']:,.3f}: price {'above (broken out)' if above else 'below'}" \
-                    if tl["slope"] < 0 else f"rising highs line at {tl['value']:,.3f}"
+                rd = f"falling resistance line at {fp(tl['value'], True)}: price {'above (broken out)' if above else 'below'}" \
+                    if tl["slope"] < 0 else f"rising highs line at {fp(tl['value'], True)}"
             items.append(_item(f"Trendline ({kind})", f"{tl['slope'] / c * 100:+.2f}%/bar", rd, pts, 0.5,
                                "Line through the last two confirmed swing lows (support) or highs (resistance)."))
     if patterns:
@@ -313,7 +316,7 @@ def price_action_group(x, sup, res, patterns=None):
         items.append(_info("Candlestick pattern", "none", "no recognised pattern in the last 3 candles"))
     if len(x) >= 120:
         hi, lo = x["High"].tail(252).max(), x["Low"].tail(252).min()
-        items.append(_info("52-week range", f"{lo:,.3f} – {hi:,.3f}", f"price {((c - lo) / (hi - lo) * 100) if hi > lo else 0:.0f}% "
+        items.append(_info("52-week range", f"{fp(lo, True)} – {fp(hi, True)}", f"price {((c - lo) / (hi - lo) * 100) if hi > lo else 0:.0f}% "
                            "of the way from the low to the high"))
     return items
 
@@ -326,10 +329,10 @@ def _retest(x, atr):
         i = len(x) - 1 - j
         lvl_hi, lvl_lo = x["HH20"].iloc[i], x["LL20"].iloc[i]
         if _ok(lvl_hi) and c.iloc[i] > lvl_hi and 0 <= c.iloc[-1] - lvl_hi <= atr:
-            return {"value": f"broke {lvl_hi:,.3f} {j} bars ago", "points": 0.6,
+            return {"value": f"broke {fp(lvl_hi, True)} {j} bars ago", "points": 0.6,
                     "reading": "pulled back to the breakout level and is holding above it"}
         if _ok(lvl_lo) and c.iloc[i] < lvl_lo and 0 <= lvl_lo - c.iloc[-1] <= atr:
-            return {"value": f"broke {lvl_lo:,.3f} {j} bars ago", "points": -0.6,
+            return {"value": f"broke {fp(lvl_lo, True)} {j} bars ago", "points": -0.6,
                     "reading": "bounced back up to the broken support and is failing below it"}
     return None
 
@@ -422,7 +425,7 @@ def opportunities(x, sup, res, tech):
     tags = []
     if res and atr and 0 <= (res[0][0] - c) / c * 100 <= 3 and (tech["scores"].get("Trend") or 0) >= 50:
         sq = bool(last["SQZ"]) if _ok(last["SQZ"]) else False
-        tags.append(("🚀 Breakout candidate", f"within 3% of resistance {res[0][0]:,.3f} in a non-bearish trend"
+        tags.append(("🚀 Breakout candidate", f"within 3% of resistance {fp(res[0][0], True)} in a non-bearish trend"
                      + (" with a volatility squeeze" if sq else "") + ". Watch for a close above it on ≥ 1.5× volume."))
     if _ok(last["E200"], last["E50"], last["E20"]) and c > last["E200"] and last["E50"] > last["E200"] and atr:
         near = min(abs(c - last["E20"]), abs(c - last["E50"])) <= atr
@@ -452,7 +455,7 @@ def opportunities(x, sup, res, tech):
         tags.append(("🔄 Possible trend reversal", "; ".join(warn) + ". Reversal signals need confirmation by price "
                      "(a break of the last swing high/low)."))
     if sup and atr and 0 <= (c - sup[0][0]) / c * 100 <= 3 and (tech["scores"].get("Momentum") or 50) < 45:
-        tags.append(("⚠️ Breakdown risk", f"sitting just above support {sup[0][0]:,.3f} with weak momentum. A close "
+        tags.append(("⚠️ Breakdown risk", f"sitting just above support {fp(sup[0][0], True)} with weak momentum. A close "
                      "below it opens the next support."))
     return tags
 
@@ -487,8 +490,8 @@ def conclusion(x, sup, res, plan, tech, hz):
     ext = []
     if fib and fib["direction"] == "up":
         ext = [(k, v) for k, v in fib["extensions"].items() if v > c][:2]
-    entry_pb = f"{plan['buy_lo']:,.3f} – {plan['buy_hi']:,.3f} (support zone)"
-    entry_bo = f"daily close above {r1:,.3f} on ≥ 1.5× volume (breakout entry)"
+    entry_pb = f"{fp(plan['buy_lo'], True)} – {fp(plan['buy_hi'], True)} (support zone)"
+    entry_bo = f"daily close above {fp(r1, True)} on ≥ 1.5× volume (breakout entry)"
     stop = plan["stop"]
 
     def rr(target, entry):
@@ -506,18 +509,18 @@ def conclusion(x, sup, res, plan, tech, hz):
                                          macd and f"MACD {macd['reading']}") if i) or "N/A",
         "Volume confirmation": vc["reading"] if vc else "N/A",
         "Volatility": "; ".join(i for i in (vb and vb["reading"], atr_i and atr_i["reading"]) if i) or "N/A",
-        "Support / resistance": f"Support {s1:,.3f} then {s2:,.3f}; resistance {r1:,.3f} then {r2:,.3f}.",
-        "Bullish scenario": f"Price holds above {s1:,.3f} and closes above {r1:,.3f} on strong volume → room "
-                            f"towards {r2:,.3f}" + (f" and the Fibonacci {ext[0][0]} extension {ext[0][1]:,.3f}" if ext else "")
+        "Support / resistance": f"Support {fp(s1, True)} then {fp(s2, True)}; resistance {fp(r1, True)} then {fp(r2, True)}.",
+        "Bullish scenario": f"Price holds above {fp(s1, True)} and closes above {fp(r1, True)} on strong volume → room "
+                            f"towards {fp(r2, True)}" + (f" and the Fibonacci {ext[0][0]} extension {fp(ext[0][1], True)}" if ext else "")
                             + ".",
-        "Bearish scenario": f"A close below {s1:,.3f} breaks support → next support {s2:,.3f}"
-                            + (f"; losing EMA 50 ({last['E50']:,.3f}) would also weaken the medium-term trend"
+        "Bearish scenario": f"A close below {fp(s1, True)} breaks support → next support {fp(s2, True)}"
+                            + (f"; losing EMA 50 ({fp(last['E50'], True)}) would also weaken the medium-term trend"
                                if _ok(last["E50"]) and c > last["E50"] else "") + ".",
         "Entry zones": f"Pullback: {entry_pb}. Breakout: {entry_bo}.",
-        "Stop-loss reference": f"{stop:,.3f} (support − {plan['atr_mult']:.1f}× ATR). A 2× ATR trailing stop would sit "
-                               f"at {c - 2 * atr:,.3f}.",
+        "Stop-loss reference": f"{fp(stop, True)} (support − {plan['atr_mult']:.1f}× ATR). A 2× ATR trailing stop would sit "
+                               f"at {fp(c - 2 * atr, True)}.",
         "Take-profit scenarios": tp_rows,
-        "Invalidation": f"The bullish case is invalid on a daily close below {s1:,.3f} (or below the stop {stop:,.3f}). "
-                        f"The bearish case is invalid on a close above {r1:,.3f}. If ADX falls below 20 the trend "
+        "Invalidation": f"The bullish case is invalid on a daily close below {fp(s1, True)} (or below the stop {fp(stop, True)}). "
+                        f"The bearish case is invalid on a close above {fp(r1, True)}. If ADX falls below 20 the trend "
                         "signals lose weight (market turning sideways).",
     }

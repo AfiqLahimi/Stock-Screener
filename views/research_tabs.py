@@ -1,5 +1,6 @@
 """More research tabs inside Analysis & Forecast: News & analysts, Financials (statements + peers),
 Valuation (DCF), Ownership & flow (holders, insiders, short interest, options) and research Notes."""
+from pxfmt import fp, pxf  # noqa: F401
 import re
 
 import numpy as np
@@ -51,9 +52,9 @@ def render_news_analysts(ticker, price, mobile):
             if tm:
                 st.markdown("<table class='kv' style='margin-top:8px'>" + "".join(
                     f"<tr><td>{k}</td><td class='mono'>{v}</td></tr>" for k, v in [
-                        ("Average target", f"{tm:,.3f}" + ("" if up is None else f" ({up:+.1f}% vs price)")),
-                        ("High / low target", f"{th:,.3f} / {tl:,.3f}" if th and tl else "N/A"),
-                        ("Median target", f"{a['target_median']:,.3f}" if a.get("target_median") else "N/A")]) +
+                        ("Average target", f"{fp(tm, True)}" + ("" if up is None else f" ({up:+.1f}% vs price)")),
+                        ("High / low target", f"{fp(th, True)} / {fp(tl, True)}" if th and tl else "N/A"),
+                        ("Median target", f"{fp(a['target_median'], True)}" if a.get("target_median") else "N/A")]) +
                     "</table>", unsafe_allow_html=True)
                 if th and tl and price and th > tl:
                     lo, hi = min(tl, price), max(th, price)
@@ -135,7 +136,7 @@ def render_financials(ticker, C, mobile):
             st.markdown("<div class='muted'>N/A: Yahoo has no statement data for this company.</div>",
                         unsafe_allow_html=True)
         else:
-            fmt = tbl.map(lambda v: "N/A" if v != v else (f"{v:,.3f}" if abs(v) < 100 else F._big(v)))
+            fmt = tbl.map(lambda v: "N/A" if v != v else (f"{fp(v, True)}" if abs(v) < 100 else F._big(v)))
             st.dataframe(fmt, width="stretch", height="content")
             pick = [r for r in ("Total Revenue", "Net Income", "Free Cash Flow", "Operating Cash Flow", "Total Debt",
                                 "Stockholders Equity") if r in tbl.index]
@@ -227,10 +228,10 @@ def render_valuation(ticker, price, mobile):
         st.markdown("<div class='sg-row'>" + "".join(
             f"<div class='sg'><div class='sg-t'>{t}</div><div class='sg-v' style='color:{c}'>{v}</div>"
             f"<div class='sg-s'>{s}</div></div>" for t, v, c, s in [
-                ("Fair value / share", f"{fv:,.3f}", col, "model estimate"),
-                ("Current price", f"{price:,.3f}" if price else "N/A", "inherit", ""),
+                ("Fair value / share", f"{fp(fv, True)}", col, "model estimate"),
+                ("Current price", f"{fp(price, True)}" if price else "N/A", "inherit", ""),
                 ("Upside / downside", "N/A" if gap is None else f"{gap:+.0f}%", col, "vs fair value"),
-                (f"Buy below ({mos}% safety)", f"{buy_below:,.3f}", P["accent"], "fair value × (1 − margin)")]) +
+                (f"Buy below ({mos}% safety)", f"{fp(buy_below, True)}", P["accent"], "fair value × (1 − margin)")]) +
                     "</div>", unsafe_allow_html=True)
         st.markdown("<table class='kv'>" + "".join(f"<tr><td>{k}</td><td class='mono'>{v}</td></tr>" for k, v in [
             ("Starting free cash flow", _big(f0)), ("Value of cash flows, years 1–10", _big(res["pv_flows"])),

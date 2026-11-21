@@ -5,6 +5,7 @@ Centre: large chart with timeframes, chart types, overlays, indicator panes belo
 Right:  overview, technical read (daily), support/resistance, bullish & bearish scenarios, fundamentals.
 Layout and indicator visibility are adjustable. All numbers come from Yahoo Finance; missing data shows N/A.
 """
+from pxfmt import fp, pxf  # noqa: F401
 import os
 
 import numpy as np
@@ -109,7 +110,7 @@ def _fmt_px(v):
     v = _num(v)
     if v is None:
         return "N/A"
-    return f"{v:,.3f}" if abs(v) < 10 else f"{v:,.2f}"
+    return f"{fp(v, True)}" if abs(v) < 10 else f"{v:,.2f}"
 
 
 @st.cache_data(ttl=60, show_spinner=False, max_entries=120)
@@ -199,7 +200,7 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
             if fb:
                 for lab_, lv in list(fb["retracements"].items()) + list(fb["extensions"].items())[:2]:
                     fig.add_hline(y=lv, line=dict(color=rgba(P["accent"], .45), width=1, dash="dot"), row=1, col=1,
-                                  annotation_text=f"Fib {lab_} {lv:,.3f}", annotation_position="left",
+                                  annotation_text=f"Fib {lab_} {fp(lv, True)}", annotation_position="left",
                                   annotation_font=dict(color=P["accent"], size=9))
         elif k.startswith("VWAP (intraday)") and intraday and d["Volume"].sum() > 0:
             fig.add_trace(go.Scatter(x=labels, y=ind.session_vwap(d), name="VWAP",
@@ -213,7 +214,7 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
                 n_ = tn[0] if tn else None
                 fig.add_hline(y=lvl, line=dict(color=rgba(col, .75), width=1, dash="dot" if not n_ else "solid"),
                               row=1, col=1,
-                              annotation_text=f"{kind} {lvl:,.3f}" + ("" if n_ is None else
+                              annotation_text=f"{kind} {fp(lvl, True)}" + ("" if n_ is None else
                                                                      " · ATR proj." if n_ == 0 else f" · {n_} tests"), annotation_position="left",
                               annotation_font=dict(color=col, size=10))
     last = float(c.iloc[-1])
@@ -444,17 +445,17 @@ def overview_panel(sym, name_of, P, pill, market_open, mobile):
 <div style="margin-top:8px">{_kv([("EMA alignment", align), ("RSI (14)", rsi_txt), ("MACD (12,26,9)", macd_state),
      ("ADX (14)", "N/A" if not ax else f"{ax['adx']:.0f}"), ("ATR (14)", "N/A" if atrp != atrp else f"{atrp:.2f}% of price"),
      ("RVOL", "N/A" if pd.isna(last['RVOL']) else f"{last['RVOL']:.1f}×")])}</div>""", unsafe_allow_html=True)
-            sup = [f"{lv:,.3f}" for lv, _ in v["sup"][:2]]
-            res = [f"{lv:,.3f}" for lv, _ in v["res"][:2]]
+            sup = [f"{fp(lv, True)}" for lv, _ in v["sup"][:2]]
+            res = [f"{fp(lv, True)}" for lv, _ in v["res"][:2]]
             st.markdown(f"""<div style="margin-top:10px">{_kv([
                 ("Resistance", f"<span style='color:{P['down']}'>{' · '.join(res)}</span>"),
                 ("Support", f"<span style='color:{P['up']}'>{' · '.join(sup)}</span>"),
-                ("ATR stop reference", f"{plan['stop']:,.3f}")])}</div>""", unsafe_allow_html=True)
+                ("ATR stop reference", f"{fp(plan['stop'], True)}")])}</div>""", unsafe_allow_html=True)
             r1, r2, s1, s2 = plan["t1"], plan["t2"], plan["s1"], plan["s2"]
-            st.markdown(f"""<div class="scen up"><b>Bullish scenario</b><br>Holds above support {s1:,.3f} and closes
-above resistance {r1:,.3f}, ideally on volume ≥ 1.5× average → next resistance {r2:,.3f}.</div>
-<div class="scen dn"><b>Bearish scenario</b><br>Closes below support {s1:,.3f} → next support {s2:,.3f}.
-{f'Losing the 50-day EMA ({e50:,.3f}) would weaken the trend further.' if e50 else ''}</div>
+            st.markdown(f"""<div class="scen up"><b>Bullish scenario</b><br>Holds above support {fp(s1, True)} and closes
+above resistance {fp(r1, True)}, ideally on volume ≥ 1.5× average → next resistance {fp(r2, True)}.</div>
+<div class="scen dn"><b>Bearish scenario</b><br>Closes below support {fp(s1, True)} → next support {fp(s2, True)}.
+{f'Losing the 50-day EMA ({fp(e50, True)}) would weaken the trend further.' if e50 else ''}</div>
 <div class="note">Scenarios are conditions to watch, not predictions. The plan's suggested action: {plan['action']}.</div>""",
                         unsafe_allow_html=True)
 

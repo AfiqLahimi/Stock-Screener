@@ -1,5 +1,6 @@
 """Phase 5 views inside Analysis & Forecast: Scorecard, Indicators, Fundamentals and the horizon assessment
 shown on the Forecast tab. Calculations live in engine.py, fundamentals.py and indicators.py."""
+from pxfmt import fp, pxf  # noqa: F401
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -113,7 +114,7 @@ def render_scorecard(ticker, tech, plan, sup, res, hz, ops, price, mobile):
         rows = []
         for k, v in con.items():
             if k == "Take-profit scenarios":
-                v = "<br>".join(f"{lab_}: <b class='mono'>{lv:,.3f}</b> · R:R {'N/A' if r is None else f'{r:.1f}'}"
+                v = "<br>".join(f"{lab_}: <b class='mono'>{fp(lv, True)}</b> · R:R {'N/A' if r is None else f'{r:.1f}'}"
                                 for lab_, lv, r in v) or "N/A (price already above the listed targets)"
             rows.append(f"<tr><td>{k}</td><td>{v}</td></tr>")
         st.markdown("<table class='concl'>" + "".join(rows) + "</table>", unsafe_allow_html=True)
@@ -165,7 +166,8 @@ def render_indicators(ticker, name, d, tech, interval, mobile):
 
     def v(col, fmt="{:,.2f}"):
         val = last.get(col)
-        return "N/A" if val is None or (isinstance(val, float) and np.isnan(val)) else fmt.format(val)
+        return "N/A" if val is None or (isinstance(val, float) and np.isnan(val)) else \
+            (fp(val, True) if fmt == "{:,.3f}" else fmt.format(val))
     c = float(last["Close"])
     rows = {
         "Moving averages": [("EMA 9 / 20 / 50", f"{v('E9', '{:,.3f}')} / {v('E20', '{:,.3f}')} / {v('E50', '{:,.3f}')}"),
@@ -201,21 +203,21 @@ def render_indicators(ticker, name, d, tech, interval, mobile):
             tl_rows = []
             for kind in ("support", "resistance"):
                 tl = ind.trendline(x, kind)
-                tl_rows.append((f"{kind.title()} trendline now", "N/A" if not tl else f"{tl['value']:,.3f} "
+                tl_rows.append((f"{kind.title()} trendline now", "N/A" if not tl else f"{fp(tl['value'], True)} "
                                 f"({tl['slope'] / c * 100:+.2f}% per bar)"))
             st.markdown("<table class='kv'>" + "".join(f"<tr><td>{p}</td><td>{q}</td></tr>" for p, q in
-                        [("Structure", stc["label"])] + tl_rows + [(p, f"{q:,.3f}") for p, q in proj]) + "</table>",
+                        [("Structure", stc["label"])] + tl_rows + [(p, f"{fp(q, True)}") for p, q in proj]) + "</table>",
                         unsafe_allow_html=True)
             st.caption("Swing highs/lows = a bar higher (lower) than the 3 bars on each side; the last 3 bars can't be "
                        "confirmed yet. Trendlines join the last two swing lows (support) or highs (resistance).")
         with b:
             if fib:
                 st.markdown(f"<div class='muted' style='font-size:12.5px'>Latest major swing: {fib['direction']} from "
-                            f"{fib['low'] if fib['direction'] == 'up' else fib['high']:,.3f} to "
-                            f"{fib['high'] if fib['direction'] == 'up' else fib['low']:,.3f}</div>", unsafe_allow_html=True)
-                st.markdown("<table class='kv'>" + "".join(f"<tr><td>Retracement {k}</td><td class='mono'>{lv:,.3f}</td></tr>"
+                            f"{fp(fib['low'] if fib['direction'] == 'up' else fib['high'], True)} to "
+                            f"{fp(fib['high'] if fib['direction'] == 'up' else fib['low'], True)}</div>", unsafe_allow_html=True)
+                st.markdown("<table class='kv'>" + "".join(f"<tr><td>Retracement {k}</td><td class='mono'>{fp(lv, True)}</td></tr>"
                             for k, lv in fib["retracements"].items()) + "".join(
-                            f"<tr><td>Extension {k}</td><td class='mono'>{lv:,.3f}</td></tr>"
+                            f"<tr><td>Extension {k}</td><td class='mono'>{fp(lv, True)}</td></tr>"
                             for k, lv in fib["extensions"].items()) + "</table>", unsafe_allow_html=True)
                 st.caption("Fibonacci levels of the biggest move in the last 120 bars: retracements are common pullback "
                            "areas, extensions are common targets. Reference levels, not guarantees.")
@@ -265,7 +267,7 @@ def render_fundamentals(ticker, price, mobile):
             s = h[sel].dropna()
             fig = go.Figure(go.Bar(x=[f"FY{ts:%Y}" for ts in s.index], y=s.values,
                                    marker_color=[P["up"] if v >= 0 else P["down"] for v in s.values],
-                                   text=[F._big(v) if sel != "EPS" else f"{v:.3f}" for v in s.values], textposition="outside"))
+                                   text=[F._big(v) if sel != "EPS" else f"{fp(v)}" for v in s.values], textposition="outside"))
             fig.update_layout(height=280, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               font=dict(size=11))
@@ -278,7 +280,7 @@ def render_fundamentals(ticker, price, mobile):
     if da is not None and len(da):
         with ui.panel("Dividend history", "per share, by calendar year (full years)"):
             fig = go.Figure(go.Bar(x=[str(y) for y in da.index[-12:]], y=da.values[-12:], marker_color=P["accent"],
-                                   text=[f"{v:.3f}" for v in da.values[-12:]], textposition="outside"))
+                                   text=[f"{fp(v)}" for v in da.values[-12:]], textposition="outside"))
             fig.update_layout(height=240, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                               font=dict(size=11))
@@ -304,7 +306,7 @@ def render_horizons(hz, ops, x):
             if fib:
                 rows += [(f"Fibonacci extension {k}", v) for k, v in list(fib["extensions"].items())[:2]]
             st.markdown("<div class='muted' style='margin-top:6px;font-size:12px'>Projected reference levels: " +
-                        " · ".join(f"{p} <b class='mono'>{q:,.3f}</b>" for p, q in rows) + "</div>",
+                        " · ".join(f"{p} <b class='mono'>{fp(q, True)}</b>" for p, q in rows) + "</div>",
                         unsafe_allow_html=True)
         st.caption("Each horizon combines a few trend checks (short: EMA 9/20, 12-bar momentum, RSI; medium: EMA 50, "
                    "60-bar change, MACD; long: EMA 200, golden/death-cross state, 52-week position). Tags are "

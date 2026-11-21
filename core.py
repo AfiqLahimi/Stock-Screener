@@ -2,6 +2,7 @@
 trade plans, forecasts, volume/ADX analysis, extra levels and charts. No page layout lives here.
 Price data: Yahoo Finance (yfinance). Bursa ~15 min delayed, US near real-time.
 """
+from pxfmt import fp, pxf  # noqa: F401
 import os
 import re
 import time
@@ -92,8 +93,40 @@ def load_shariah():
     return {c.strip().zfill(4) + ".KL" for c in df["code"].dropna()}, asof
 
 
+CRYPTO = {
+    "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "XRP-USD": "XRP", "BNB-USD": "BNB", "SOL-USD": "Solana",
+    "DOGE-USD": "Dogecoin", "TRX-USD": "TRON", "ADA-USD": "Cardano", "LINK-USD": "Chainlink",
+    "AVAX-USD": "Avalanche", "XLM-USD": "Stellar", "SUI20947-USD": "Sui", "BCH-USD": "Bitcoin Cash",
+    "HBAR-USD": "Hedera", "LTC-USD": "Litecoin", "TON11419-USD": "Toncoin", "DOT-USD": "Polkadot",
+    "SHIB-USD": "Shiba Inu", "UNI7083-USD": "Uniswap", "NEAR-USD": "NEAR Protocol", "AAVE-USD": "Aave",
+    "ETC-USD": "Ethereum Classic", "ATOM-USD": "Cosmos", "ARB11841-USD": "Arbitrum", "PEPE24478-USD": "Pepe",
+}
+CRYPTO_ALIAS = {k.split("-")[0].rstrip("0123456789"): k for k in CRYPTO}
+CRYPTO_ALIAS.update({v.upper().replace(" ", ""): k for k, v in CRYPTO.items()})
+
+
+def is_crypto(t: str) -> bool:
+    return str(t).upper().endswith(("-USD", "-USDT", "-MYR", "-EUR", "-BTC", "-ETH"))
+
+
+def normalise_crypto(sym: str) -> str:
+    """'btc', 'Bitcoin', 'BTCUSD', 'BINANCE:BTCUSDT' or 'BTC-USD' -> Yahoo's 'BTC-USD'."""
+    s = (sym or "").strip().upper().replace(" ", "")
+    if ":" in s:
+        s = s.split(":", 1)[1]
+    if not s:
+        return ""
+    if is_crypto(s):
+        return s
+    for q in ("USDT", "USD"):
+        if s.endswith(q) and len(s) > len(q):
+            s = s[: -len(q)]
+            break
+    return CRYPTO_ALIAS.get(s, s + "-USD")
+
+
 def display_name(t: str) -> str:
-    return BURSA.get(t) or US.get(t) or NAMES.get(t) or t
+    return BURSA.get(t) or US.get(t) or CRYPTO.get(t) or NAMES.get(t) or (t[:-4] if is_crypto(t) and t.endswith("-USD") else t)
 
 
 def tv_symbol(t: str) -> str:
@@ -502,13 +535,13 @@ def score_factors(d: pd.DataFrame, sup, res):
         F.append({"Group": group, "Factor": factor, "Reading": reading, "Rule": rule, "Points": pts, "text": text})
 
     e20, e50, e200 = float(last["EMA20"]), float(last["EMA50"]), float(last["EMA200"])
-    add("Trend", "Price vs EMA200", f"{price:.3f} vs {e200:.3f}", "above: +15 · below: −15",
+    add("Trend", "Price vs EMA200", f"{fp(price)} vs {fp(e200)}", "above: +15 · below: −15",
         15 if price > e200 else -15,
         "Price above EMA200: long-term uptrend" if price > e200 else "Price below EMA200: long-term downtrend")
-    add("Trend", "EMA50 vs EMA200", f"{e50:.3f} vs {e200:.3f}", "above: +10 · below: −10",
+    add("Trend", "EMA50 vs EMA200", f"{fp(e50)} vs {fp(e200)}", "above: +10 · below: −10",
         10 if e50 > e200 else -10,
         "EMA50 above EMA200 (golden cross structure)" if e50 > e200 else "EMA50 below EMA200 (death cross structure)")
-    add("Trend", "Price vs EMA20", f"{price:.3f} vs {e20:.3f}", "above: +10 · below: −10",
+    add("Trend", "Price vs EMA20", f"{fp(price)} vs {fp(e20)}", "above: +10 · below: −10",
         10 if price > e20 else -10,
         "Price above EMA20: short-term momentum positive" if price > e20 else "Price below EMA20: short-term momentum weak")
 
@@ -538,17 +571,17 @@ def score_factors(d: pd.DataFrame, sup, res):
 
     s1, r1 = sup[0][0], res[0][0]
     if price - s1 <= atr:
-        add("Levels", "Near support", f"{price - s1:.3f} above S {s1:.3f} (ATR {atr:.3f})", "within 1 ATR: +15", 15,
-            f"Price near support {s1:.3f} (low-risk entry area)")
+        add("Levels", "Near support", f"{fp(price - s1)} above S {fp(s1)} (ATR {fp(atr)})", "within 1 ATR: +15", 15,
+            f"Price near support {fp(s1)} (low-risk entry area)")
     if r1 - price <= atr and res[0][1] > 0:
-        add("Levels", "Near resistance", f"{r1 - price:.3f} below R {r1:.3f} (ATR {atr:.3f})", "within 1 ATR: −15", -15,
-            f"Price near resistance {r1:.3f} (limited upside)")
+        add("Levels", "Near resistance", f"{fp(r1 - price)} below R {fp(r1)} (ATR {fp(atr)})", "within 1 ATR: −15", -15,
+            f"Price near resistance {fp(r1)} (limited upside)")
     if prev["Close"] < s1 <= price:
-        add("Levels", "Breakout", f"prev close {float(prev['Close']):.3f} → {price:.3f} over {s1:.3f}",
-            "closed above a level: +10", 10, f"Breakout: just closed above {s1:.3f}")
+        add("Levels", "Breakout", f"prev close {fp(float(prev['Close']))} → {fp(price)} over {fp(s1)}",
+            "closed above a level: +10", 10, f"Breakout: just closed above {fp(s1)}")
     if prev["Close"] > r1 >= price:
-        add("Levels", "Breakdown", f"prev close {float(prev['Close']):.3f} → {price:.3f} under {r1:.3f}",
-            "closed below a level: −10", -10, f"Breakdown: just closed below {r1:.3f}")
+        add("Levels", "Breakdown", f"prev close {fp(float(prev['Close']))} → {fp(price)} under {fp(r1)}",
+            "closed below a level: −10", -10, f"Breakdown: just closed below {fp(r1)}")
 
     if pd.notna(last["VolAvg"]) and last["VolAvg"] > 0 and last["Volume"] > 1.5 * last["VolAvg"]:
         green = price >= last["Open"]
@@ -596,23 +629,23 @@ def trade_plan(d, sup, res, label, unit, atr_mult: float = 1.0):
 
     if bullish and in_zone:
         action = "🟢 CONSIDER BUYING"
-        when = (f"Price is in the buy zone now. Entry around **{price:.3f}**, stop loss **{stop:.3f}**. "
-                f"Take half profit at **{r1:.3f}**, the rest at **{r2:.3f}**.")
+        when = (f"Price is in the buy zone now. Entry around **{fp(price)}**, stop loss **{fp(stop)}**. "
+                f"Take half profit at **{fp(r1)}**, the rest at **{fp(r2)}**.")
     elif bullish:
         action = "🟡 UPTREND, BUT DON'T CHASE"
-        when = (f"Price is far above support. Two options: **(a)** wait for a pullback to **{buy_lo:.3f}–{buy_hi:.3f}** "
+        when = (f"Price is far above support. Two options: **(a)** wait for a pullback to **{fp(buy_lo)}–{fp(buy_hi)}** "
                 f"(rough estimate ~{bars_back} {unit} at a normal pace), or **(b)** buy when price "
-                f"**closes above {r1:.3f}** on high volume (breakout), stop below {r1 - atr:.3f}.")
+                f"**closes above {fp(r1)}** on high volume (breakout), stop below {fp(r1 - atr)}.")
     elif bearish:
         action = "🔴 AVOID BUYING / CONSIDER SELLING"
-        when = (f"If you hold it: consider selling or reducing, especially if price **closes below {s1:.3f}**. "
-                f"A bounce to **{sell_lo:.3f}–{sell_hi:.3f}** is a better place to sell. "
-                f"Don't buy until it closes back above EMA20 ({last['EMA20']:.3f}).")
+        when = (f"If you hold it: consider selling or reducing, especially if price **closes below {fp(s1)}**. "
+                f"A bounce to **{fp(sell_lo)}–{fp(sell_hi)}** is a better place to sell. "
+                f"Don't buy until it closes back above EMA20 ({fp(last['EMA20'])}).")
     else:
         action = "⚪ WAIT"
-        when = (f"No clear direction. A **BUY** signal appears if price bounces off **{s1:.3f}** with RSI rising / MACD crossing up, "
-                f"**or** price closes above **{r1:.3f}**. A **SELL** signal if price closes below **{s1:.3f}** "
-                f"(next downside target {s2:.3f}).")
+        when = (f"No clear direction. A **BUY** signal appears if price bounces off **{fp(s1)}** with RSI rising / MACD crossing up, "
+                f"**or** price closes above **{fp(r1)}**. A **SELL** signal if price closes below **{fp(s1)}** "
+                f"(next downside target {fp(s2)}).")
 
     return {
         "action": action, "when": when, "entry": entry, "buy_lo": buy_lo, "buy_hi": buy_hi,
@@ -1087,33 +1120,33 @@ def _draw_extras(fig, ex, labels):
                           y0=vp["edges"][i], y1=vp["edges"][i + 1], fillcolor=col, opacity=0.28,
                           line_width=0, layer="below")
         fig.add_hline(y=vp["poc"], line=dict(color=P["warn"], width=1.4, dash="dashdot"), row=1, col=1,
-                      annotation_text=f"POC {vp['poc']:.3f}", annotation_position="bottom left",
+                      annotation_text=f"POC {fp(vp['poc'])}", annotation_position="bottom left",
                       annotation_font=dict(color=P["warn"], size=11))
         for k, lab in (("vah", "VAH"), ("val", "VAL")):
             fig.add_hline(y=vp[k], line=dict(color=rgba(P["accent"], .55), width=1, dash="dot"), row=1, col=1,
-                          annotation_text=f"{lab} {vp[k]:.3f}", annotation_position="bottom left",
+                          annotation_text=f"{lab} {fp(vp[k])}", annotation_position="bottom left",
                           annotation_font=dict(color=P["accent"], size=10))
     if "fib" in ex:
         for r, p in ex["fib"]["levels"]:
             strong = r in (0.382, 0.5, 0.618)
             fig.add_hline(y=p, line=dict(color=rgba(gold, .75 if strong else .4), width=1.2 if strong else 0.9,
                                          dash="dot"), row=1, col=1,
-                          annotation_text=f"Fib {r * 100:.1f}% · {p:.3f}", annotation_position="top left",
+                          annotation_text=f"Fib {r * 100:.1f}% · {fp(p)}", annotation_position="top left",
                           annotation_font=dict(color=gold, size=10))
     if "touch" in ex:
         for lvl, n in ex["touch"]:
             fig.add_hline(y=lvl, line=dict(color=rgba(teal, .8), width=0.8 + min(n, 8) * 0.15, dash="longdash"),
-                          row=1, col=1, annotation_text=f"⟷ {n}x · {lvl:.3f}", annotation_position="top left",
+                          row=1, col=1, annotation_text=f"⟷ {n}x · {fp(lvl)}", annotation_position="top left",
                           annotation_font=dict(color=teal, size=10))
     if "swings" in ex:
         sw = ex["swings"]
         fig.add_trace(go.Scatter(mode="markers", x=[labels[i] for i, _ in sw["hi"]], y=[p * 1.006 for _, p in sw["hi"]],
                                  marker=dict(symbol="triangle-down", size=9, color=pink), name="Swing high",
-                                 hovertemplate="Swing high %{customdata:.3f}<extra></extra>",
+                                 hovertemplate="Swing high %{customdata:.6~g}<extra></extra>",
                                  customdata=[p for _, p in sw["hi"]]), 1, 1)
         fig.add_trace(go.Scatter(mode="markers", x=[labels[i] for i, _ in sw["lo"]], y=[p * 0.994 for _, p in sw["lo"]],
                                  marker=dict(symbol="triangle-up", size=9, color=teal), name="Swing low",
-                                 hovertemplate="Swing low %{customdata:.3f}<extra></extra>",
+                                 hovertemplate="Swing low %{customdata:.6~g}<extra></extra>",
                                  customdata=[p for _, p in sw["lo"]]), 1, 1)
         for p in sw["lv_hi"]:
             fig.add_hline(y=p, line=dict(color=rgba(pink, .45), width=1, dash="dot"), row=1, col=1)
@@ -1181,12 +1214,12 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                 z = zone_for(zones, lvl)
                 if z is None:
                     fig.add_hline(y=lvl, line=dict(color=rgba(col, .55), width=1, dash="dot"), row=1, col=1,
-                                  annotation_text=f"{role} {lvl:.3f} · proj.", annotation_position="right",
+                                  annotation_text=f"{role} {fp(lvl)} · proj.", annotation_position="right",
                                   annotation_font=dict(color=col, size=10.5))
                     continue
                 fig.add_hrect(y0=z["lo"], y1=z["hi"], fillcolor=col, opacity=0.13, line_width=0, row=1, col=1)
                 fig.add_hline(y=lvl, line=dict(color=rgba(col, .8), width=1.1), row=1, col=1,
-                              annotation_text=f"{role} {lvl:.3f} · {n}×" + (" ⇄" if z["polarity"].startswith("old") else ""),
+                              annotation_text=f"{role} {fp(lvl)} · {n}×" + (" ⇄" if z["polarity"].startswith("old") else ""),
                               annotation_position="right", annotation_font=dict(color=col, size=10.5))
                 mx = [(ts, p_, k, r_) for ts, p_, k, r_ in z["members"]
                       if ts.strftime(fmt) in shown]
@@ -1195,12 +1228,12 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
                         x=[ts.strftime(fmt) for ts, _, _, _ in mx], y=[p_ for _, p_, _, _ in mx], mode="markers",
                         marker=dict(symbol=["triangle-up" if k == "trough" else "triangle-down" for _, _, k, _ in mx],
                                     size=10, color=col, line=dict(width=1, color=P["on_fill"])),
-                        name=f"{role} {lvl:.3f} reactions", showlegend=False,
+                        name=f"{role} {fp(lvl)} reactions", showlegend=False,
                         customdata=[[k, r_] for _, _, k, r_ in mx],
-                        hovertemplate=f"{role} {lvl:.3f}: reaction %{{customdata[0]}} %{{y:.3f}} "
+                        hovertemplate=f"{role} {fp(lvl)}: reaction %{{customdata[0]}} %{{y:.6~g}} "
                                       "(moved %{customdata[1]:.1f} ATR after)<extra></extra>"), 1, 1)
         fig.add_hline(y=plan["stop"], line=dict(color=P["warn"], width=1.1, dash="dash"), row=1, col=1,
-                      annotation_text=f"Stop {plan['stop']:.3f}", annotation_position="bottom right",
+                      annotation_text=f"Stop {fp(plan['stop'])}", annotation_position="bottom right",
                       annotation_font=dict(color=P["warn"], size=11))
 
     rv = x["RVOL"].fillna(0).values
@@ -1411,7 +1444,7 @@ def scan_universe(universe: tuple, interval: str, period: str, unit: str) -> pd.
                 "Trend (ADX)": adx_regime(last["ADX"], last["PDI"], last["MDI"]),
                 "Support": sup[0][0], "Resistance": res[0][0],
                 "To support %": (price / sup[0][0] - 1) * 100,
-                "Buy zone": f"{p['buy_lo']:.3f} – {p['buy_hi']:.3f}",
+                "Buy zone": f"{fp(p['buy_lo'])} – {fp(p['buy_hi'])}",
                 "Stop": p["stop"], "Target": p["t1"], "R:R": p["rr1"],
                 # ---- extras (Dashboard + advanced Screener)
                 "To resistance %": (res[0][0] / price - 1) * 100,
