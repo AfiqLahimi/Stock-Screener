@@ -85,7 +85,7 @@ def render(C):
                         width="stretch", config={"displaylogo": False, "scrollZoom": True})
         legend_bits = []
         if "Support/resistance & zones" in overlays:
-            legend_bits.append("green/red lines = support/resistance (×N touches) · green band = buy zone · red band = "
+            legend_bits.append("green/red lines + shaded zones = support/resistance (N× = times tested, ▲▼ = the reaction lows/highs it is built from, ⇄ = role reversal, proj. = ATR projection; method in the Levels tab) · green band = buy zone · red band = "
                                "sell zone · orange dashed = stop loss")
         if show_fc:
             legend_bits.append("blue dashed = trend forecast with nominal 68%/95% bands (see Forecast accuracy)")
@@ -812,13 +812,13 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
                 figb.add_trace(go.Scatter(x=x_lab, y=bt_df["pred"], name="Forecast", mode="lines+markers",
                                           line=dict(color=P["accent"], dash="dash"), marker=dict(size=4)))
                 figb.add_trace(go.Scatter(x=x_lab, y=bt_df["actual"], name="Actual", mode="lines+markers",
-                                          line=dict(color=P["text"]), marker=dict(size=4)))
+                                          line=dict(color=P["neutral"]), marker=dict(size=4)))
                 figb.update_layout(height=340, margin=dict(l=8, r=8, t=30, b=8),
                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                                    title=dict(text=f"Forecast vs actual ({fc['horizon']} {bar_word}s ahead, out-of-sample)",
                                               font=dict(size=13)),
                                    legend=dict(orientation="h", y=1.12), hovermode="x unified",
-                                   font=dict(family="Inter, sans-serif", color=P["text"]))
+                                   font=dict(family="Inter, sans-serif"))
                 figb.update_yaxes(gridcolor=P["grid"])
                 st.plotly_chart(figb, width="stretch", config={"displaylogo": False})
 
@@ -869,13 +869,43 @@ most: weighted swing score {mtf['swing_score']:+d} / ±{mtf['swing_max']}.</div>
 
         # ================= Levels
         with tabs[16]:
-            with st.expander("Support & resistance levels (table)", expanded=bool(extra_rows)):
-                lv = pd.DataFrame(
-                    [{"Type": "Resistance", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in reversed(res)]
-                    + [{"Type": "▶ Current price", "Level": price, "Touches": "", "Distance %": 0.0}]
-                    + [{"Type": "Support", "Level": l, "Touches": str(n) if n else "projected", "Distance %": (l / price - 1) * 100} for l, n in sup])
+            zones, zmeta = level_zones(d)
+            st.markdown("#### 📏 How the support & resistance lines are drawn")
+            st.markdown(f"""<div class='note'>
+Method: the classical approach in John J. Murphy's <i>Technical Analysis of the Financial Markets</i> (ch. 4).<br>
+• <b>Support</b> = a previous reaction low, <b>resistance</b> = a previous reaction high. A candle counts only if it is the
+lowest/highest of the {REACTION_W} candles on each side (so the latest {REACTION_W} candles are never used: no look-ahead)
+and price then moved at least {MIN_REACTION_ATR:.0f} ATR away from it (a real reaction, not noise).<br>
+• Reaction points within {zmeta['tol'] if zmeta else 0:.3f} (½ ATR, min 0.6%) of each other form one <b>zone</b>; the line is the median.<br>
+• A zone is used only if it was <b>tested 2+ times</b>, or once by a <b>major swing</b> (≥ {MAJOR_REACTION_ATR:.0f} ATR reaction).
+Strength follows Murphy's three factors: number of tests, <b>time</b> traded in the zone, <b>volume</b> there, and <b>recency</b>.<br>
+• <b>Role reversal</b>: a broken resistance becomes support (and vice versa); it is flagged.
+Levels closer than 1 ATR are treated as one area (the stronger is kept).<br>
+• On the chart, the ▲/▼ markers are the actual reaction lows/highs each line is built from; the shaded band is the zone.
+With no level above (new highs) or below, a dotted <b>ATR projection</b> (±2 ATR) is shown instead, labelled as such.
+</div>""", unsafe_allow_html=True)
+            with st.expander("Support & resistance levels (table)", expanded=True):
+                def _row(kind, l, n):
+                    z = zone_for(zones, l)
+                    if z is None:
+                        return {"Type": kind, "Level": l, "Zone": "", "Tests": "projected", "Grade": "ATR projection",
+                                "Strength": None, "Days in zone": None, "Vol vs avg": None, "Last tested": "",
+                                "Role": "", "Reaction dates": "", "Distance %": (l / price - 1) * 100}
+                    return {"Type": kind, "Level": l, "Zone": f"{z['lo']:.3f} – {z['hi']:.3f}", "Tests": str(n),
+                            "Grade": z["grade"], "Strength": z["strength"], "Days in zone": z["time_bars"],
+                            "Vol vs avg": z["vol_ratio"], "Last tested": z["last_date"].strftime("%d %b %Y"),
+                            "Role": z["polarity"],
+                            "Reaction dates": ", ".join(f"{ts:%d %b %y} ({'low' if k == 'trough' else 'high'} {p_:.3f})"
+                                                        for ts, p_, k, _ in z["members"]),
+                            "Distance %": (l / price - 1) * 100}
+                lv = pd.DataFrame([_row("Resistance", l, n) for l, n in reversed(res)]
+                                  + [{"Type": "▶ Current price", "Level": price, "Zone": "", "Tests": "", "Grade": "",
+                                     "Last tested": "", "Role": "", "Reaction dates": "", "Distance %": 0.0}]
+                                  + [_row("Support", l, n) for l, n in sup])
                 st.dataframe(lv, hide_index=True, width="stretch",
                              column_config={"Level": st.column_config.NumberColumn(format="%.3f"),
+                                            "Strength": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
+                                            "Vol vs avg": st.column_config.NumberColumn(format="%.2f×"),
                                             "Distance %": st.column_config.NumberColumn(format="%+.1f%%")})
                 if extra_rows:
                     st.markdown("**Extra levels**")

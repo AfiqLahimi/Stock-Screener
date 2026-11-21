@@ -150,7 +150,7 @@ def render(C):
         fig = go.Figure(go.Bar(x=sec.values, y=sec.index, orientation="h", marker_color=P["accent"],
                                text=[f"{v:.0f}%" for v in sec.values], textposition="outside", cliponaxis=False))
         fig.update_layout(height=max(200, 30 * len(sec) + 50), margin=dict(l=4, r=30, t=6, b=4),
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
         fig.update_xaxes(gridcolor=P["grid"], ticksuffix="%")
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="rk_sec")
         myr = sum(w[t] for t in stock_r.columns if t.endswith(".KL")) * 100
@@ -187,7 +187,7 @@ def render(C):
                                        text=np.round(cr.values, 2), texttemplate="%{text}"))
             fig.update_layout(height=max(260, 34 * len(names) + 60),
                               margin=dict(l=4, r=4, t=6, b=4), paper_bgcolor="rgba(0,0,0,0)",
-                              plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                              plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="rk_corr")
             avg = cr.values[np.triu_indices(len(cr), 1)].mean()
             st.caption(f"Average correlation {avg:.2f}. Below ~0.3 = well spread; above ~0.6 = holdings tend to fall "

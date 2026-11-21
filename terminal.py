@@ -207,11 +207,14 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
     if "Support / resistance" in overlays and levels:
         lo_, hi_ = float(x["Low"].min()), float(x["High"].max())
         span = hi_ - lo_
-        for lvl, kind in levels:
+        for lvl, kind, *tn in levels:
             if lo_ - span * 0.15 <= lvl <= hi_ + span * 0.15:
                 col = P["up"] if kind == "S" else P["down"]
-                fig.add_hline(y=lvl, line=dict(color=rgba(col, .75), width=1, dash="dot"), row=1, col=1,
-                              annotation_text=f"{kind} {lvl:,.3f}", annotation_position="left",
+                n_ = tn[0] if tn else None
+                fig.add_hline(y=lvl, line=dict(color=rgba(col, .75), width=1, dash="dot" if not n_ else "solid"),
+                              row=1, col=1,
+                              annotation_text=f"{kind} {lvl:,.3f}" + ("" if n_ is None else
+                                                                     " · ATR proj." if n_ == 0 else f" · {n_} tests"), annotation_position="left",
                               annotation_font=dict(color=col, size=10))
     last = float(c.iloc[-1])
     lc = P["up"] if last >= float(x["Open"].iloc[-1]) else P["down"]
@@ -242,7 +245,7 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
                                      line=dict(color=P["warn"], width=1.2)), i, 1)
         elif p == "ADX / DMI":
             fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", showlegend=False,
-                                     line=dict(color=P["text"], width=1.5)), i, 1)
+                                     line=dict(color=P["neutral"], width=1.5)), i, 1)
             fig.add_trace(go.Scatter(x=labels, y=x["PDI"], name="+DI", showlegend=False,
                                      line=dict(color=P["up"], width=1)), i, 1)
             fig.add_trace(go.Scatter(x=labels, y=x["MDI"], name="−DI", showlegend=False,
@@ -282,7 +285,7 @@ def build_chart(d, name, P, rgba, ctype, overlays, panes, levels, intraday, mobi
                       legend=dict(orientation="h", y=1.02, x=0, font=dict(size=10.5, color=P["muted"])),
                       newshape=dict(line=dict(color=P["warn"], width=2)),
                       font=dict(family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
-                                color=P["text"], size=11))
+                                size=11))
     fig.update_xaxes(type="category", nticks=4 if mobile else 9, tickangle=0, showgrid=False,
                      tickfont=dict(color=P["muted"], size=10 if mobile else 11))
     fig.update_yaxes(gridcolor=P["grid"], side="right", tickfont=dict(color=P["muted"]))
@@ -586,7 +589,7 @@ def render(C):
                     from core import stock_view
                     v = stock_view(sym, "1D")
                     if v is not None:
-                        levels = [(lv, "S") for lv, _ in v["sup"][:3]] + [(lv, "R") for lv, _ in v["res"][:3]]
+                        levels = [(lv, "S", n) for lv, n in v["sup"][:3]] + [(lv, "R", n) for lv, n in v["res"][:3]]
                 fig = build_chart(d, name_of(sym), P, rgba, ctype, overlays, panes, levels, intraday, mobile,
                                   HEIGHTS[hsel] if not mobile else 360)
                 st.plotly_chart(fig, width="stretch", key="term_chart",
@@ -612,8 +615,8 @@ def render(C):
 CSS = """<style>
 .ohlc{{font-size:12.5px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin:-2px 0 -4px}}
 .ohlc b{{font-size:14px}}
-.ohlc i{{font-style:normal;color:{muted};margin:0 3px 0 6px}}
-.scen{{font-size:12.5px;line-height:1.5;padding:8px 10px;border-radius:8px;margin-top:8px;border:1px solid {border}}}
+.ohlc i{{font-style:normal;color:var(--ss-muted);margin:0 3px 0 6px}}
+.scen{{font-size:12.5px;line-height:1.5;padding:8px 10px;border-radius:8px;margin-top:8px;border:1px solid var(--ss-border)}}
 .scen.up{{border-left:3px solid {up}}}
 .scen.dn{{border-left:3px solid {down}}}
 .st-key-term_favb button{{font-size:17px;padding:0 12px;min-height:38px;color:{warn}}}

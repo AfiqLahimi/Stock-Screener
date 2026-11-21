@@ -67,7 +67,7 @@ def render(C):
         fig.add_hline(y=100, line=dict(color=P["muted"], width=1, dash="dot"))
         fig.update_layout(height=340, margin=dict(l=4, r=4, t=10, b=4), hovermode="x unified",
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                          legend=dict(orientation="h", y=1.08, x=0), font=dict(color=P["text"], size=11))
+                          legend=dict(orientation="h", y=1.08, x=0), font=dict(size=11))
         fig.update_yaxes(gridcolor=P["grid"], side="right")
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="cmp_perf")
 
@@ -130,7 +130,7 @@ def render(C):
         fig.add_hline(y=50, line=dict(color=P["muted"], width=1, dash="dot"))
         fig.update_layout(height=300, barmode="group", margin=dict(l=4, r=4, t=10, b=4),
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis_range=[0, 100],
-                          legend=dict(orientation="h", y=1.12, x=0), font=dict(color=P["text"], size=11))
+                          legend=dict(orientation="h", y=1.12, x=0), font=dict(size=11))
         fig.update_yaxes(gridcolor=P["grid"])
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="cmp_groups")
     with b, ui.panel("Correlation of daily returns", f"last {rng}"):
@@ -140,7 +140,7 @@ def render(C):
                                    colorscale=[[0, P["down"]], [0.5, P["card2"]], [1, P["up"]]],
                                    text=np.round(cr.values, 2), texttemplate="%{text}", showscale=False))
         fig.update_layout(height=300, margin=dict(l=4, r=4, t=10, b=4),
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="cmp_corr")
         st.caption("1 = always move together, 0 = unrelated, −1 = opposite. Holding stocks with lower correlation "
                    "spreads risk better.")

@@ -325,7 +325,7 @@ def index_chart(d, name, rng, mob):
     fig.update_layout(height=300 if mob else 360, margin=dict(l=4, r=4, t=6, b=4),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
                       showlegend=not mob, legend=dict(orientation="h", y=1.02, x=0, font=dict(size=11)),
-                      hovermode="x unified", font=dict(family="Inter, sans-serif", color=P["text"], size=11))
+                      hovermode="x unified", font=dict(family="Inter, sans-serif", size=11))
     fig.update_xaxes(type="category", nticks=6, showgrid=False)
     fig.update_yaxes(gridcolor=P["grid"], side="right")
     return fig
@@ -387,7 +387,7 @@ def sector_chart(liq, mob):
                            hovertemplate="%{y}: %{x:+.2f}%<extra></extra>"))
     fig.update_layout(height=max(260, 26 * len(g) + 40), margin=dict(l=4, r=40, t=4, b=4),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                      font=dict(family="Inter, sans-serif", color=P["text"], size=11))
+                      font=dict(family="Inter, sans-serif", size=11))
     lo, hi = float(min(g["chg"].min(), 0)), float(max(g["chg"].max(), 0))
     pad = (hi - lo) * 0.28 or 1
     fig.update_xaxes(gridcolor=P["grid"], zerolinecolor=P["border"], ticksuffix="%",
@@ -477,20 +477,20 @@ def opportunities(scan, mob):
 CSS = """<style>
 .idx-grid{{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:10px;margin-bottom:14px}}
 .newsbox .news:first-child{{padding-top:2px}}
-.idx{{background:{card};border:1px solid {border};border-radius:12px;padding:11px 13px 7px}}
-.idx .n{{font-size:10.5px;color:{muted};text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;
+.idx{{background:var(--ss-card);border:1px solid var(--ss-border);border-radius:12px;padding:11px 13px 7px}}
+.idx .n{{font-size:10.5px;color:var(--ss-muted);text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;margin-bottom:5px}}
 .idx .v{{font-size:18px;font-weight:700}}
 .idx .c{{font-size:12.5px;font-weight:600}}
 .spark{{width:100%;height:26px;display:block;margin-top:3px}}
-.bar{{height:6px;background:{card2};border-radius:4px;overflow:hidden;margin-top:5px}}
+.bar{{height:6px;background:var(--ss-card2);border-radius:4px;overflow:hidden;margin-top:5px}}
 .bar.big{{height:9px;margin-top:10px}}
 .bar i{{display:block;height:100%;border-radius:4px}}
 .pc{{margin-bottom:9px}}
-.card.divider{{margin-top:10px !important;padding-top:10px !important;border-top:1px solid {border} !important}}
+.card.divider{{margin-top:10px !important;padding-top:10px !important;border-top:1px solid var(--ss-border) !important}}
 .pl{{display:flex;justify-content:space-between;gap:10px;font-size:13px}}
-.pl span{{color:{muted}}}
-.ps{{font-size:11.5px;color:{muted};margin-top:2px}}
+.pl span{{color:var(--ss-muted)}}
+.ps{{font-size:11.5px;color:var(--ss-muted);margin-top:2px}}
 @media (max-width:1200px){{.idx-grid{{grid-template-columns:repeat(4,minmax(0,1fr))}}}}
 @media (max-width:768px){{.idx-grid{{grid-template-columns:repeat(2,minmax(0,1fr)) !important;gap:6px}}
   .idx{{padding:7px 9px 4px}} .idx .v{{font-size:15px}} .idx .c{{font-size:12px}} .spark{{height:18px}}}}

@@ -168,7 +168,7 @@ def render(C):
                                    marker=dict(colors=[pal[i % len(pal)] for i in range(len(tbl))],
                                                line=dict(color=P["card"], width=2))))
             fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False,
-                              paper_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                              paper_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="pf_pie")
         with b, ui.panel("Profit / loss by holding", "RM"):
             t2 = tbl.sort_values("P/L (RM)")
@@ -177,7 +177,7 @@ def render(C):
                                    text=[f"{v:+,.0f}" for v in t2["P/L (RM)"]], textposition="inside",
                                    insidetextanchor="middle", textfont=dict(color=P["on_fill"])))
             fig.update_layout(height=max(220, 34 * len(t2) + 60), margin=dict(l=4, r=40, t=6, b=4),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
             fig.update_xaxes(gridcolor=P["grid"])
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="pf_pl")
 

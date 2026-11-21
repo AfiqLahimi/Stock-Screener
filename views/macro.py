@@ -141,7 +141,7 @@ def render(C):
                     s, unit = charts[pick]
                     fig = go.Figure(go.Scatter(x=s.index, y=s.values, line=dict(color=P["accent"], width=2)))
                     fig.update_layout(height=200, margin=dict(l=4, r=4, t=6, b=4), paper_bgcolor="rgba(0,0,0,0)",
-                                      plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                                      plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
                     fig.update_yaxes(gridcolor=P["grid"], ticksuffix="%" if unit == "%" else "")
                     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=f"mac_chart_{grp}")
         st.caption("Inflation and growth figures are % change vs a year earlier unless stated. Malaysian CPI/GDP "

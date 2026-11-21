@@ -121,7 +121,7 @@ def render(C):
         fig.add_hline(y=float(d["Close"].max()), line=dict(color=P["muted"], dash="dot"),
                       annotation_text="5-year high", annotation_position="top left")
         fig.update_layout(height=320, margin=dict(l=4, r=4, t=10, b=4), paper_bgcolor="rgba(0,0,0,0)",
-                          plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11), hovermode="x unified")
+                          plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11), hovermode="x unified")
         fig.update_yaxes(gridcolor=P["grid"], side="right")
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="cm_chart")
     with right, ui.panel("What a rise means for Bursa", "typical effect · measured correlation (1y)"):

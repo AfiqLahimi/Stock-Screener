@@ -282,8 +282,8 @@ def render_dividends(universe, prices, display_name, P, pill):
                                textfont=dict(color=P["muted"], size=11)))
         fig.update_layout(height=330, margin=dict(l=8, r=8, t=40, b=8),
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                          title=dict(text=f"Dividend per share by year ({cur})", font=dict(size=14, color=P["text"])),
-                          font=dict(family="Inter, sans-serif", color=P["text"]), showlegend=False)
+                          title=dict(text=f"Dividend per share by year ({cur})", font=dict(size=14)),
+                          font=dict(family="Inter, sans-serif"), showlegend=False)
         fig.update_yaxes(gridcolor=P["grid"], zeroline=False, tickfont=dict(color=P["muted"]))
         fig.update_xaxes(tickfont=dict(color=P["muted"]))
         st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
@@ -715,7 +715,7 @@ def _heatmap_mine(universe, display_name, P, load_many, analyse, sector_map):
         ))
         fig.update_layout(height=470 if st.session_state.get("_mobile") else 620, margin=dict(l=0, r=0, t=4, b=0),
                           paper_bgcolor="rgba(0,0,0,0)",
-                          font=dict(family="Inter, sans-serif", color=P["text"]))
+                          font=dict(family="Inter, sans-serif"))
         st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
         st.caption(f"Green = up, red = down ({metric.lower()}). Box size = "
                    f"{'average daily trading value (last 20 days)' if size_by == 'Trading value' else 'equal'}. "

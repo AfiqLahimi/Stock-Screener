@@ -366,31 +366,112 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-def find_levels(d: pd.DataFrame, lookback: int = 250, w: int = 5):
-    """Support/resistance from clustered swing highs/lows."""
+# ----------------------------------------------------------------------------
+# Support & resistance (John J. Murphy, "Technical Analysis of the Financial Markets", ch. 4):
+#   support is usually a previous reaction low and resistance a previous reaction high; a level is more
+#   significant the more often it was tested, the longer prices traded there, the heavier the volume there and
+#   the more recent it is; a broken level tends to swap roles (polarity / role reversal); round numbers matter.
+# ----------------------------------------------------------------------------
+REACTION_W = 5           # a swing high/low must be the extreme of the 5 candles on each side (confirmed)
+MIN_REACTION_ATR = 1.0   # ...and price must have moved at least 1 ATR away from it afterwards (a real reaction)
+MAJOR_REACTION_ATR = 2.0 # a single-touch level is only kept if its reaction was at least 2 ATR (a major turn)
+
+
+def _round_step(price):
+    return 0.05 if price < 1 else 0.5 if price < 10 else 5 if price < 100 else 10 if price < 1000 else 50
+
+
+def level_zones(d: pd.DataFrame, lookback: int = 250, w: int = REACTION_W):
+    """All support/resistance zones found from confirmed reaction highs/lows, with the evidence for each."""
     x = d.tail(lookback)
-    hi, lo = x["High"].values, x["Low"].values
-    price, atr = float(x["Close"].iloc[-1]), float(x["ATR"].iloc[-1])
-    pivots = []
-    for i in range(w, len(x) - w):
-        if hi[i] == hi[i - w:i + w + 1].max():
-            pivots.append(hi[i])
-        if lo[i] == lo[i - w:i + w + 1].min():
-            pivots.append(lo[i])
-    # include the latest swing (not enough bars to its right yet)
-    pivots += [float(x["High"].tail(w).max()), float(x["Low"].tail(w).min())]
-    pivots.sort()
-    tol = max(0.5 * atr, price * 0.008)
-    clusters = []
-    for p in pivots:
-        if clusters and p - clusters[-1][-1] <= tol:
-            clusters[-1].append(p)
+    n = len(x)
+    if n < 2 * w + 5:
+        return [], None
+    H, L, C, V = (x[k].values.astype(float) for k in ("High", "Low", "Close", "Volume"))
+    atr = float(x["ATR"].iloc[-1]) if "ATR" in x and pd.notna(x["ATR"].iloc[-1]) else float(np.nanmean(H - L))
+    price = float(C[-1])
+    tol = max(0.5 * atr, price * 0.006)
+    pts = []
+    for i in range(w, n - w):                       # the last w candles can't be confirmed yet (no look-ahead)
+        j = min(n, i + 16)
+        if H[i] == H[i - w:i + w + 1].max():
+            react = H[i] - L[i + 1:j].min()
+            if react >= MIN_REACTION_ATR * atr:
+                pts.append({"i": i, "price": H[i], "kind": "peak", "react": react / atr})
+        if L[i] == L[i - w:i + w + 1].min():
+            react = H[i + 1:j].max() - L[i]
+            if react >= MIN_REACTION_ATR * atr:
+                pts.append({"i": i, "price": L[i], "kind": "trough", "react": react / atr})
+    pts.sort(key=lambda p: p["price"])
+    groups = []
+    for p_ in pts:                                  # zones are at most `tol` wide (no chaining drift)
+        if groups and p_["price"] - groups[-1][0]["price"] <= tol:
+            groups[-1].append(p_)
         else:
-            clusters.append([p])
-    lv = [(float(np.mean(c)), len(c)) for c in clusters]
-    gap = 0.15 * atr  # levels too close to price are treated as "being tested"
-    sup = sorted([l for l in lv if l[0] < price - gap], key=lambda l: -l[0])[:3]
-    res = sorted([l for l in lv if l[0] > price + gap], key=lambda l: l[0])[:3]
+            groups.append([p_])
+    vol_avg = float(np.nanmean(V)) if np.nansum(V) > 0 else 0.0
+    zones = []
+    for g in groups:
+        prices = [q["price"] for q in g]
+        lvl = float(np.median(prices))
+        lo, hi = min(prices), max(prices)
+        band_lo, band_hi = min(lo, lvl - tol / 4), max(hi, lvl + tol / 4)
+        inside = (L <= band_hi) & (H >= band_lo)
+        time_bars = int(inside.sum())
+        vol_ratio = float(np.nanmean(V[inside]) / vol_avg) if vol_avg and inside.any() else None
+        last_i = max(q["i"] for q in g)
+        age = n - 1 - last_i
+        recency = 0.5 ** (age / 120)
+        kinds = {q["kind"] for q in g}
+        touches = len(g)
+        big = max(q["react"] for q in g)
+        raw = (1 + (touches - 1)) * (1 + min(time_bars, 40) / 40) * (1 + min(vol_ratio or 1, 2) / 4) * (0.4 + 0.6 * recency)
+        step = _round_step(lvl)
+        zones.append({
+            "level": lvl, "lo": band_lo, "hi": band_hi, "touches": touches, "time_bars": time_bars,
+            "vol_ratio": vol_ratio, "last_date": x.index[last_i], "age": age, "recency": recency, "raw": raw,
+            "biggest_reaction_atr": big, "kinds": kinds,
+            "members": [(x.index[q["i"]], q["price"], q["kind"], q["react"]) for q in g],
+            "round": abs(lvl - round(lvl / step) * step) <= tol / 2,
+            "testing": band_lo - tol / 2 <= price <= band_hi + tol / 2,
+            "grade": "strong" if touches >= 3 or (touches >= 2 and time_bars >= 15) else "medium" if touches >= 2
+            else "major swing" if big >= MAJOR_REACTION_ATR else "weak",
+        })
+    top = max((z["raw"] for z in zones), default=1) or 1
+    for z in zones:
+        z["strength"] = round(z["raw"] / top * 100)
+        role = "support" if z["level"] < price else "resistance"
+        z["role"] = role
+        flipped = (role == "support" and z["kinds"] == {"peak"}) or (role == "resistance" and z["kinds"] == {"trough"})
+        z["polarity"] = "old resistance, now support" if flipped and role == "support" else \
+            "old support, now resistance" if flipped else ("acted as both" if len(z["kinds"]) == 2 else "")
+    return zones, {"atr": atr, "tol": tol, "price": price, "lookback": n, "points": len(pts)}
+
+
+def find_levels(d: pd.DataFrame, lookback: int = 250, w: int = REACTION_W):
+    """Nearest meaningful support and resistance below/above the price as [(level, touches)], nearest first.
+    A zone counts if it was tested at least twice, or once by a major (≥ 2 ATR) reaction. Zones the price is
+    sitting inside are 'being tested' and skipped. With nothing above (new highs) or below, an ATR projection
+    is returned with 0 touches."""
+    zones, meta = level_zones(d, lookback, w)
+    x = d.tail(lookback)
+    price = float(x["Close"].iloc[-1])
+    atr = meta["atr"] if meta else float(x["ATR"].iloc[-1])
+    ok = [z for z in zones if z["grade"] != "weak" and not z["testing"]]
+
+    def pick(cands):
+        """Nearest first, but levels closer than 1 ATR to each other are one area: keep the stronger."""
+        out = []
+        for z in cands:
+            if out and abs(z["level"] - out[-1]["level"]) < atr:
+                if z["strength"] > out[-1]["strength"]:
+                    out[-1] = z
+                continue
+            out.append(z)
+        return [(z["level"], z["touches"]) for z in out[:3]]
+
+    sup = pick(sorted((z for z in ok if z["hi"] < price), key=lambda z: -z["level"]))
+    res = pick(sorted((z for z in ok if z["lo"] > price), key=lambda z: z["level"]))
     if not sup:
         sup = [(price - 2 * atr, 0)]
     if not res:
@@ -400,6 +481,14 @@ def find_levels(d: pd.DataFrame, lookback: int = 250, w: int = 5):
     while len(sup) < 2:
         sup.append((sup[-1][0] - 2 * atr, 0))
     return sup, res
+
+
+def zone_for(zones, level):
+    """The zone a chosen level came from (None for ATR projections)."""
+    for z in zones or []:
+        if abs(z["level"] - level) < 1e-9:
+            return z
+    return None
 
 
 def score_factors(d: pd.DataFrame, sup, res):
@@ -626,16 +715,14 @@ def future_labels(d, n, interval):
 # ----------------------------------------------------------------------------
 # Theme (soft dark, easy on the eyes)
 # ----------------------------------------------------------------------------
-DARK_P = dict(
-    bg="#10151f", card="#171d29", card2="#1c2331", border="#262f40", text="#dfe3ea",
-    muted="#8890a2", up="#3fb68b", down="#e0646a", accent="#7b93f5", warn="#e3a34b",
-    grid="#1f2737", ema20="#e3c46a", ema50="#6fa8ef", ema200="#b48ae0", heat_mid="#2b3242", on_fill="#ffffff",
-)
-LIGHT_P = dict(
-    bg="#f5f6f8", card="#ffffff", card2="#eef1f5", border="#dde2ea", text="#1c2230",
-    muted="#667085", up="#16955f", down="#d0414e", accent="#4f6be8", warn="#b97a12",
-    grid="#e7eaf0", ema20="#c29a12", ema50="#2f74d0", ema200="#8650c2", heat_mid="#e4e8ee", on_fill="#ffffff",
-)
+# Structural colours (cards, borders, grid, muted text) are the same translucent greys in both themes so they
+# look right the instant the viewer switches theme (Streamlit doesn't rerun the script on a theme switch).
+# Page CSS uses var(--ss-*) colours computed in the browser from the current text colour.
+_NEUTRAL = dict(muted="#8a93a6", grid="rgba(138,147,166,0.16)", border="rgba(138,147,166,0.28)", card="rgba(138,147,166,0.06)", card2="rgba(138,147,166,0.12)", bg="rgba(0,0,0,0)", heat_mid="rgba(138,147,166,0.22)")
+DARK_P = dict(_NEUTRAL, text="#dfe3ea", up="#3fb68b", down="#e0646a", accent="#7b93f5", warn="#e3a34b",
+              ema20="#e3c46a", ema50="#6fa8ef", ema200="#b48ae0", on_fill="#ffffff", neutral="#9aa3b5")
+LIGHT_P = dict(_NEUTRAL, text="#1c2230", up="#16955f", down="#d0414e", accent="#4f6be8", warn="#b97a12",
+               ema20="#c29a12", ema50="#2f74d0", ema200="#8650c2", on_fill="#ffffff", neutral="#7a8394")
 P = dict(DARK_P)
 
 
@@ -824,8 +911,8 @@ def adx_regime(adx, pdi, mdi):
 
 def regime_color(regime):
     k = REGIME_COLOR_KEY.get(regime, "muted")
-    return {"up": P["up"], "down": P["down"], "up_soft": mix(P["up"], P["text"], 0.3),
-            "down_soft": mix(P["down"], P["text"], 0.3)}.get(k, P["muted"])
+    return {"up": P["up"], "down": P["down"], "up_soft": mix(P["up"], "#8a93a6", 0.3),
+            "down_soft": mix(P["down"], "#8a93a6", 0.3)}.get(k, P["muted"])
 
 
 def adx_analysis(d: pd.DataFrame, bar_word="day"):
@@ -1087,14 +1174,31 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     if "Support/resistance & zones" in overlays:
         fig.add_hrect(y0=plan["buy_lo"], y1=plan["buy_hi"], fillcolor=P["up"], opacity=0.10, line_width=0, row=1, col=1)
         fig.add_hrect(y0=plan["sell_lo"], y1=plan["sell_hi"], fillcolor=P["down"], opacity=0.10, line_width=0, row=1, col=1)
-        for lvl, n in sup:
-            fig.add_hline(y=lvl, line=dict(color=rgba(P["up"], .7), width=1.2), row=1, col=1,
-                          annotation_text=f"S {lvl:.3f}" + (f" · {n}x" if n else ""), annotation_position="right",
-                          annotation_font=dict(color=P["up"], size=11))
-        for lvl, n in res:
-            fig.add_hline(y=lvl, line=dict(color=rgba(P["down"], .7), width=1.2), row=1, col=1,
-                          annotation_text=f"R {lvl:.3f}" + (f" · {n}x" if n else " · proj."), annotation_position="right",
-                          annotation_font=dict(color=P["down"], size=11))
+        zones, _ = level_zones(d)
+        shown = set(labels)
+        for role, lst, col in (("S", sup, P["up"]), ("R", res, P["down"])):
+            for lvl, n in lst:
+                z = zone_for(zones, lvl)
+                if z is None:
+                    fig.add_hline(y=lvl, line=dict(color=rgba(col, .55), width=1, dash="dot"), row=1, col=1,
+                                  annotation_text=f"{role} {lvl:.3f} · proj.", annotation_position="right",
+                                  annotation_font=dict(color=col, size=10.5))
+                    continue
+                fig.add_hrect(y0=z["lo"], y1=z["hi"], fillcolor=col, opacity=0.13, line_width=0, row=1, col=1)
+                fig.add_hline(y=lvl, line=dict(color=rgba(col, .8), width=1.1), row=1, col=1,
+                              annotation_text=f"{role} {lvl:.3f} · {n}×" + (" ⇄" if z["polarity"].startswith("old") else ""),
+                              annotation_position="right", annotation_font=dict(color=col, size=10.5))
+                mx = [(ts, p_, k, r_) for ts, p_, k, r_ in z["members"]
+                      if ts.strftime(fmt) in shown]
+                if mx:
+                    fig.add_trace(go.Scatter(
+                        x=[ts.strftime(fmt) for ts, _, _, _ in mx], y=[p_ for _, p_, _, _ in mx], mode="markers",
+                        marker=dict(symbol=["triangle-up" if k == "trough" else "triangle-down" for _, _, k, _ in mx],
+                                    size=10, color=col, line=dict(width=1, color=P["on_fill"])),
+                        name=f"{role} {lvl:.3f} reactions", showlegend=False,
+                        customdata=[[k, r_] for _, _, k, r_ in mx],
+                        hovertemplate=f"{role} {lvl:.3f}: reaction %{{customdata[0]}} %{{y:.3f}} "
+                                      "(moved %{customdata[1]:.1f} ATR after)<extra></extra>"), 1, 1)
         fig.add_hline(y=plan["stop"], line=dict(color=P["warn"], width=1.1, dash="dash"), row=1, col=1,
                       annotation_text=f"Stop {plan['stop']:.3f}", annotation_position="bottom right",
                       annotation_font=dict(color=P["warn"], size=11))
@@ -1161,17 +1265,17 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
     if "ADX" in ROW:
         # ---- ADX panel
         fig.add_hrect(y0=0, y1=ADX_WEAK, fillcolor=P["muted"], opacity=0.07, line_width=0, row=ROW['ADX'], col=1)
-        fig.add_hline(y=ADX_STRONG, line=dict(color=rgba(P["text"], .35), width=1, dash="dot"), row=ROW['ADX'], col=1,
+        fig.add_hline(y=ADX_STRONG, line=dict(color=rgba(P["muted"], .6), width=1, dash="dot"), row=ROW['ADX'], col=1,
                       annotation_text="25 strong", annotation_position="right",
                       annotation_font=dict(color=P["muted"], size=10))
-        fig.add_hline(y=ADX_WEAK, line=dict(color=rgba(P["text"], .25), width=1, dash="dot"), row=ROW['ADX'], col=1,
+        fig.add_hline(y=ADX_WEAK, line=dict(color=rgba(P["muted"], .45), width=1, dash="dot"), row=ROW['ADX'], col=1,
                       annotation_text="20 trend / no trend", annotation_position="right",
                       annotation_font=dict(color=P["muted"], size=10))
         fig.add_trace(go.Scatter(x=labels, y=x["PDI"], name="+DI", line=dict(color=P["up"], width=1.2),
                                  showlegend=False, hovertemplate="+DI %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
         fig.add_trace(go.Scatter(x=labels, y=x["MDI"], name="−DI", line=dict(color=P["down"], width=1.2),
                                  showlegend=False, hovertemplate="−DI %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
-        fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", line=dict(color=P["text"], width=2),
+        fig.add_trace(go.Scatter(x=labels, y=x["ADX"], name="ADX", line=dict(color=P["neutral"], width=2),
                                  showlegend=False, hovertemplate="ADX %{y:.1f}<extra></extra>"), ROW['ADX'], 1)
 
     fig.update_layout(
@@ -1179,9 +1283,8 @@ def make_chart(d, sup, res, plan, name, interval, fc=None, show_bars=120, extra=
         height=height or ((380 + 90 * (rows - 1)) if mobile else (560 + 115 * (rows - 1))),
         margin=dict(l=2, r=62, t=8, b=4) if mobile else dict(l=8, r=96, t=36, b=8),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter, sans-serif", color=P["text"], size=12),
+        font=dict(family="Inter, sans-serif", size=12),
         xaxis_rangeslider_visible=False, hovermode="x unified",
-        hoverlabel=dict(bgcolor=P["card2"], bordercolor=P["border"], font=dict(color=P["text"])),
         legend=dict(orientation="h", y=1.05, x=0, font=dict(size=11, color=P["muted"]), bgcolor="rgba(0,0,0,0)"),
         bargap=0.25,
     )

@@ -62,7 +62,7 @@ def render_news_analysts(ticker, price, mobile):
                                 f"<div style='position:absolute;top:13px;left:{pos(tl):.0f}%;right:{100 - pos(th):.0f}%;"
                                 f"height:4px;background:{P['accent']};opacity:.5;border-radius:3px'></div>"
                                 f"<div title='price' style='position:absolute;top:6px;left:calc({pos(price):.0f}% - 2px);"
-                                f"width:4px;height:18px;background:{P['text']};border-radius:2px'></div>"
+                                f"width:4px;height:18px;background:currentColor;border-radius:2px'></div>"
                                 f"<div title='average target' style='position:absolute;top:8px;left:calc({pos(tm):.0f}% - 7px);"
                                 f"width:14px;height:14px;border-radius:50%;background:{P['accent']}'></div></div>"
                                 f"<div class='muted' style='font-size:11.5px'>bar = analysts' low → high target · "
@@ -76,7 +76,7 @@ def render_news_analysts(ticker, price, mobile):
                                        marker_color=[c[2] for c in cats], text=[r0.get(c[1], 0) for c in cats],
                                        textposition="outside"))
                 fig.update_layout(height=200, margin=dict(l=4, r=4, t=14, b=4), paper_bgcolor="rgba(0,0,0,0)",
-                                  plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                                  plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
                 fig.update_yaxes(visible=False)
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="ri_recs")
             est = a.get("eps_est")
@@ -146,7 +146,7 @@ def render_financials(ticker, C, mobile):
                 fig = go.Figure(go.Bar(x=list(s.index), y=s.values, marker_color=[P["up"] if v >= 0 else P["down"] for v in s],
                                        text=[F._big(v) for v in s.values], textposition="outside"))
                 fig.update_layout(height=240, margin=dict(l=4, r=4, t=14, b=4), paper_bgcolor="rgba(0,0,0,0)",
-                                  plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11))
+                                  plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11))
                 fig.update_yaxes(gridcolor=P["grid"])
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="fin_chart")
         st.caption("Yahoo usually provides 4 years of annual and 4–5 quarters of quarterly statements. Figures are "
@@ -228,7 +228,7 @@ def render_valuation(ticker, price, mobile):
             f"<div class='sg'><div class='sg-t'>{t}</div><div class='sg-v' style='color:{c}'>{v}</div>"
             f"<div class='sg-s'>{s}</div></div>" for t, v, c, s in [
                 ("Fair value / share", f"{fv:,.3f}", col, "model estimate"),
-                ("Current price", f"{price:,.3f}" if price else "N/A", P["text"], ""),
+                ("Current price", f"{price:,.3f}" if price else "N/A", "inherit", ""),
                 ("Upside / downside", "N/A" if gap is None else f"{gap:+.0f}%", col, "vs fair value"),
                 (f"Buy below ({mos}% safety)", f"{buy_below:,.3f}", P["accent"], "fair value × (1 − margin)")]) +
                     "</div>", unsafe_allow_html=True)
@@ -332,9 +332,9 @@ def render_ownership(ticker, mobile):
         fig.add_trace(go.Bar(x=near.index, y=near["call_oi"], name="Calls", marker_color=P["up"]))
         fig.add_trace(go.Bar(x=near.index, y=-near["put_oi"], name="Puts", marker_color=P["down"]))
         if spot:
-            fig.add_vline(x=spot, line=dict(color=P["text"], dash="dot"))
+            fig.add_vline(x=spot, line=dict(color=P["neutral"], dash="dot"))
         fig.update_layout(height=260, barmode="relative", margin=dict(l=4, r=4, t=10, b=4),
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=P["text"], size=11),
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11),
                           legend=dict(orientation="h", y=1.1))
         fig.update_yaxes(gridcolor=P["grid"], title="open interest (puts below)")
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="own_opt")

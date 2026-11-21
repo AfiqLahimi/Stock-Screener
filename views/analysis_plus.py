@@ -268,7 +268,7 @@ def render_fundamentals(ticker, price, mobile):
                                    text=[F._big(v) if sel != "EPS" else f"{v:.3f}" for v in s.values], textposition="outside"))
             fig.update_layout(height=280, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              font=dict(color=P["text"], size=11))
+                              font=dict(size=11))
             fig.update_yaxes(gridcolor=P["grid"])
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="fu_chart")
             yo = s.pct_change().iloc[1:] * 100 if (s > 0).all() else None
@@ -281,7 +281,7 @@ def render_fundamentals(ticker, price, mobile):
                                    text=[f"{v:.3f}" for v in da.values[-12:]], textposition="outside"))
             fig.update_layout(height=240, margin=dict(l=4, r=4, t=10, b=4),
                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              font=dict(color=P["text"], size=11))
+                              font=dict(size=11))
             fig.update_yaxes(gridcolor=P["grid"])
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="fu_div")
 
